@@ -6,7 +6,6 @@ import {
   Eye,
   Edit3,
   Archive,
-  Trash2,
   MessageSquare,
 } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
@@ -20,12 +19,12 @@ export function PatientsPage() {
   const {
     patients,
     doctors,
+    authUser,
     getDoctorById,
     openPatientModal,
     setProfilePatientId,
     openConversationForPatient,
     archivePatient,
-    deletePatient,
   } = useClinic();
 
   const [search, setSearch] = useState('');
@@ -33,10 +32,12 @@ export function PatientsPage() {
   const [doctorFilter, setDoctorFilter] = useState('all');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortAsc, setSortAsc] = useState(true);
-  const [confirmTarget, setConfirmTarget] = useState<{
-    patient: Patient;
-    action: 'archive' | 'delete';
-  } | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
+  const [archiveTarget, setArchiveTarget] = useState<Patient | null>(null);
+
+  const canManagePatients =
+    authUser?.role === 'ADMIN' || authUser?.role === 'RECEPTIONIST';
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -80,6 +81,13 @@ export function PatientsPage() {
     });
   }, [patients, statusFilter, doctorFilter, search, sortField, sortAsc, getDoctorById]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredPatients.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedPatients = filteredPatients.slice(
+    (safePage - 1) * pageSize,
+    safePage * pageSize
+  );
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -87,18 +95,20 @@ export function PatientsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[#172B27]">Patients</h1>
           <p className="text-xs sm:text-sm text-[#84938D]">
-            {patients.length} total patient records at Northfield Family Clinic
+            {patients.length} patient records persisted at Northfield Family Clinic
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => openPatientModal({ mode: 'create' })}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs sm:text-sm font-medium transition-colors self-start sm:self-auto cursor-pointer"
-        >
-          <UserPlus className="w-4 h-4" />
-          Add patient
-        </button>
+        {canManagePatients && (
+          <button
+            type="button"
+            onClick={() => openPatientModal({ mode: 'create' })}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs sm:text-sm font-medium transition-colors self-start sm:self-auto cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            Add patient
+          </button>
+        )}
       </div>
 
       {/* Search & Filters */}
@@ -109,7 +119,10 @@ export function PatientsPage() {
               <button
                 key={st}
                 type="button"
-                onClick={() => setStatusFilter(st)}
+                onClick={() => {
+                  setStatusFilter(st);
+                  setPage(1);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                   statusFilter === st
                     ? 'bg-white text-[#172B27] shadow-2xs'
@@ -128,7 +141,10 @@ export function PatientsPage() {
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
               placeholder="Search name, phone, email..."
               className="pl-8 pr-3 py-2 rounded-xl border border-[#E2EAE5] text-xs text-[#172B27] focus:outline-none focus:border-[#0B6657] w-60"
             />
@@ -136,7 +152,10 @@ export function PatientsPage() {
 
           <select
             value={doctorFilter}
-            onChange={(e) => setDoctorFilter(e.target.value)}
+            onChange={(e) => {
+              setDoctorFilter(e.target.value);
+              setPage(1);
+            }}
             aria-label="Filter patients by doctor"
             className="px-3 py-2 rounded-xl border border-[#E2EAE5] bg-white text-xs text-[#172B27] focus:outline-none focus:border-[#0B6657]"
           >
@@ -152,7 +171,7 @@ export function PatientsPage() {
 
       {/* Patient Directory Table */}
       <div className="bg-white rounded-2xl border border-[#E2EAE5] overflow-hidden">
-        {filteredPatients.length === 0 ? (
+        {paginatedPatients.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-sm font-medium text-[#172B27]">
               No matching patient records
@@ -162,213 +181,220 @@ export function PatientsPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#E2EAE5] bg-[#F3F7F4]/60 text-[11px] font-semibold text-[#84938D]">
-                  <th className="py-3 px-4 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('name')}
-                      className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
-                    >
-                      Patient name
-                      <ArrowUpDown className="w-3 h-3" />
-                    </button>
-                  </th>
-                  <th className="py-3 px-4 whitespace-nowrap">Phone number</th>
-                  <th className="py-3 px-4 whitespace-nowrap">Email</th>
-                  <th className="py-3 px-4 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('lastAppointment')}
-                      className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
-                    >
-                      Last appointment
-                      <ArrowUpDown className="w-3 h-3" />
-                    </button>
-                  </th>
-                  <th className="py-3 px-4 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('assignedDoctorId')}
-                      className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
-                    >
-                      Assigned doctor
-                      <ArrowUpDown className="w-3 h-3" />
-                    </button>
-                  </th>
-                  <th className="py-3 px-4 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('status')}
-                      className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
-                    >
-                      Patient status
-                      <ArrowUpDown className="w-3 h-3" />
-                    </button>
-                  </th>
-                  <th className="py-3 px-4 text-right whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E2EAE5] text-xs">
-                {filteredPatients.map((p) => {
-                  const doc = getDoctorById(p.assignedDoctorId);
-                  const statusColor =
-                    p.status === 'Active'
-                      ? 'text-[#0B6657]'
-                      : p.status === 'New'
-                      ? 'text-[#20B875]'
-                      : p.status === 'Follow-up'
-                      ? 'text-amber-700'
-                      : 'text-[#84938D]';
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#E2EAE5] bg-[#F3F7F4]/60 text-[11px] font-semibold text-[#84938D]">
+                    <th className="py-3 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('name')}
+                        className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
+                      >
+                        Patient name
+                        <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 whitespace-nowrap">Phone number</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Email</th>
+                    <th className="py-3 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('lastAppointment')}
+                        className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
+                      >
+                        Last appointment
+                        <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('assignedDoctorId')}
+                        className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
+                      >
+                        Assigned doctor
+                        <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('status')}
+                        className="inline-flex items-center gap-1 hover:text-[#172B27] cursor-pointer"
+                      >
+                        Patient status
+                        <ArrowUpDown className="w-3 h-3" />
+                      </button>
+                    </th>
+                    <th className="py-3 px-4 text-right whitespace-nowrap">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2EAE5] text-xs">
+                  {paginatedPatients.map((p) => {
+                    const doc = getDoctorById(p.assignedDoctorId);
+                    const statusColor =
+                      p.status === 'Active'
+                        ? 'text-[#0B6657]'
+                        : p.status === 'New'
+                        ? 'text-[#20B875]'
+                        : p.status === 'Follow-up'
+                        ? 'text-amber-700'
+                        : 'text-[#84938D]';
 
-                  return (
-                    <tr
-                      key={p.id}
-                      className="hover:bg-[#F3F7F4]/50 transition-colors"
-                    >
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setProfilePatientId(p.id)}
-                          className="flex items-center gap-2.5 text-left group cursor-pointer"
-                        >
-                          <Avatar name={p.name} bgColor={p.avatarColor} size="sm" />
-                          <div>
-                            <p className="font-semibold text-[#172B27] group-hover:text-[#0B6657] transition-colors">
-                              {p.name}
-                            </p>
-                            <p className="text-[11px] text-[#84938D]">
-                              {p.insuranceProvider}
-                            </p>
-                          </div>
-                        </button>
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap tabular-nums text-[#172B27]">
-                        {p.phone}
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap text-[#84938D]">
-                        {p.email}
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap tabular-nums text-[#172B27]">
-                        {p.lastAppointment}
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap text-[#172B27]">
-                        {doc?.name ?? '—'}
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span className={`font-medium ${statusColor}`}>{p.status}</span>
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1">
+                    return (
+                      <tr
+                        key={p.id}
+                        className="hover:bg-[#F3F7F4]/50 transition-colors"
+                      >
+                        <td className="py-3 px-4 whitespace-nowrap">
                           <button
                             type="button"
                             onClick={() => setProfilePatientId(p.id)}
-                            title="View patient profile"
-                            aria-label={`View ${p.name}`}
-                            className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#172B27] hover:bg-[#EAF4EF] hover:text-[#073C35] transition-colors cursor-pointer"
+                            className="flex items-center gap-2.5 text-left group cursor-pointer"
                           >
-                            <Eye className="w-3.5 h-3.5" />
+                            <Avatar name={p.name} bgColor={p.avatarColor} size="sm" />
+                            <div>
+                              <p className="font-semibold text-[#172B27] group-hover:text-[#0B6657] transition-colors">
+                                {p.name}
+                              </p>
+                              <p className="text-[11px] text-[#84938D]">
+                                {p.insuranceProvider}
+                              </p>
+                            </div>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => openConversationForPatient(p.id)}
-                            title="Message on WhatsApp"
-                            aria-label={`Message ${p.name}`}
-                            className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#0B6657] hover:bg-[#EAF4EF] transition-colors cursor-pointer"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openPatientModal({ mode: 'edit', patient: p })
-                            }
-                            title="Edit patient"
-                            aria-label={`Edit ${p.name}`}
-                            className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#172B27] hover:bg-[#F3F7F4] transition-colors cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          {p.status !== 'Archived' && (
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap tabular-nums text-[#172B27]">
+                          {p.phone}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap text-[#84938D]">
+                          {p.email}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap tabular-nums text-[#172B27]">
+                          {p.lastAppointment}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap text-[#172B27]">
+                          {doc?.name ?? '—'}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span className={`font-medium ${statusColor}`}>
+                            {p.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               type="button"
-                              onClick={() =>
-                                setConfirmTarget({ patient: p, action: 'archive' })
-                              }
-                              title="Archive patient"
-                              aria-label={`Archive ${p.name}`}
-                              className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#84938D] hover:text-[#172B27] hover:bg-[#F3F7F4] transition-colors cursor-pointer"
+                              onClick={() => setProfilePatientId(p.id)}
+                              title="View patient profile"
+                              aria-label={`View ${p.name}`}
+                              className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#172B27] hover:bg-[#EAF4EF] hover:text-[#073C35] transition-colors cursor-pointer"
                             >
-                              <Archive className="w-3.5 h-3.5" />
+                              <Eye className="w-3.5 h-3.5" />
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setConfirmTarget({ patient: p, action: 'delete' })
-                            }
-                            title="Delete patient"
-                            aria-label={`Delete ${p.name}`}
-                            className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#84938D] hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            <button
+                              type="button"
+                              onClick={() => openConversationForPatient(p.id)}
+                              title="Internal clinic thread"
+                              aria-label={`Message about ${p.name}`}
+                              className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#0B6657] hover:bg-[#EAF4EF] transition-colors cursor-pointer"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                            </button>
+                            {canManagePatients && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openPatientModal({ mode: 'edit', patient: p })
+                                  }
+                                  title="Edit patient"
+                                  aria-label={`Edit ${p.name}`}
+                                  className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#172B27] hover:bg-[#F3F7F4] transition-colors cursor-pointer"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                {p.status !== 'Archived' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setArchiveTarget(p)}
+                                    title="Archive patient"
+                                    aria-label={`Archive ${p.name}`}
+                                    className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#84938D] hover:text-[#172B27] hover:bg-[#F3F7F4] transition-colors cursor-pointer"
+                                  >
+                                    <Archive className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="px-4 py-3 border-t border-[#E2EAE5] flex items-center justify-between text-xs text-[#84938D]">
+                <span className="tabular-nums">
+                  Page {safePage} of {totalPages} · {filteredPatients.length} patients
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={safePage <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1 rounded-lg border border-[#E2EAE5] disabled:opacity-45 text-[#172B27] cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={safePage >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    className="px-3 py-1 rounded-lg border border-[#E2EAE5] disabled:opacity-45 text-[#172B27] cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* Confirmation Modal for Archive / Delete */}
+      {/* Soft Archive Confirmation Modal */}
       <Modal
-        open={Boolean(confirmTarget)}
-        onClose={() => setConfirmTarget(null)}
-        title={
-          confirmTarget?.action === 'delete'
-            ? 'Delete patient record'
-            : 'Archive patient record'
-        }
-        subtitle={confirmTarget?.patient.name}
+        open={Boolean(archiveTarget)}
+        onClose={() => setArchiveTarget(null)}
+        title="Archive patient record"
+        subtitle={archiveTarget?.name}
         maxWidthClass="max-w-md"
       >
         <p className="text-sm text-[#172B27]">
-          {confirmTarget?.action === 'delete'
-            ? `Are you sure you want to permanently remove ${confirmTarget.patient.name} and their appointment history? This cannot be undone.`
-            : `Archiving ${confirmTarget?.patient.name} hides them from active booking queues while preserving medical history.`}
+          Archiving <span className="font-semibold">{archiveTarget?.name}</span> removes them from active booking queues while preserving medical visit history and audit logs.
         </p>
         <div className="flex items-center justify-end gap-2 mt-6">
           <button
             type="button"
-            onClick={() => setConfirmTarget(null)}
+            onClick={() => setArchiveTarget(null)}
             className="px-4 py-2 rounded-xl border border-[#E2EAE5] text-xs font-medium text-[#172B27] hover:bg-[#F3F7F4] cursor-pointer"
           >
             Cancel
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (!confirmTarget) return;
-              if (confirmTarget.action === 'delete') {
-                deletePatient(confirmTarget.patient.id);
-              } else {
-                archivePatient(confirmTarget.patient.id);
-              }
-              setConfirmTarget(null);
+            onClick={async () => {
+              if (!archiveTarget) return;
+              await archivePatient(archiveTarget.id);
+              setArchiveTarget(null);
             }}
-            className={`px-4 py-2 rounded-xl text-white text-xs font-medium cursor-pointer ${
-              confirmTarget?.action === 'delete'
-                ? 'bg-red-600 hover:bg-red-700'
-                : 'bg-[#073C35] hover:bg-[#0B6657]'
-            }`}
+            className="px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
           >
-            {confirmTarget?.action === 'delete' ? 'Delete patient' : 'Archive patient'}
+            Archive patient
           </button>
         </div>
       </Modal>

@@ -1,28 +1,36 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { format } from 'date-fns';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
   Appointment,
   AppointmentStatus,
+  AuditLogEntry,
+  AuthUser,
   Campaign,
-  ClinicNotification,
+  CampaignStatus,
+  ClinicAnalytics,
   ClinicSettings,
   Conversation,
   Doctor,
+  DoctorSchedule,
+  FlowStatus,
   NavRoute,
   Patient,
+  StaffAccount,
+  StaffRole,
   ToastItem,
-  WhatsAppMessage,
 } from '../types/clinic';
 import {
-  INITIAL_APPOINTMENTS,
-  INITIAL_CAMPAIGNS,
-  INITIAL_CONVERSATIONS,
-  INITIAL_DOCTORS,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_PATIENTS,
-  INITIAL_SETTINGS,
-  TODAY_STR,
-} from '../data/mockClinicData';
+  apiRequest,
+  getAuthToken,
+  setAuthToken,
+  setOnUnauthorized,
+} from '../lib/api';
 
 export interface AppointmentModalDraft {
   mode: 'create' | 'edit';
@@ -38,22 +46,62 @@ export interface PatientModalDraft {
   patient?: Patient;
 }
 
+export type AuthStateStatus =
+  | 'loading'
+  | 'setup_required'
+  | 'unauthenticated'
+  | 'authenticated';
+
+const DEFAULT_SETTINGS: ClinicSettings = {
+  clinicName: 'Northfield Family Clinic',
+  address: '410 Northfield Avenue, Suite 200',
+  phone: '+1 (555) 200-4800',
+  email: 'reception@northfieldclinic.org',
+  openingHours: 'Mon-Fri 8:00 AM - 6:00 PM | Sat 9:00 AM - 1:00 PM',
+  autoReminder24h: true,
+  autoReminder2h: true,
+  includeParkingNote: true,
+  defaultAppointmentDuration: 30,
+};
+
 interface ClinicContextValue {
+  authStatus: AuthStateStatus;
+  authUser: AuthUser | null;
+  defaultAdmin: { name: string; email: string };
+  setupInitialAdmin: (input: {
+    name: string;
+    email: string;
+    password: string;
+  }) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+
   activeRoute: NavRoute;
   setActiveRoute: (route: NavRoute) => void;
+  isLoadingData: boolean;
+  refreshAllData: () => Promise<void>;
 
   doctors: Doctor[];
   patients: Patient[];
   appointments: Appointment[];
   conversations: Conversation[];
   campaigns: Campaign[];
-  notifications: ClinicNotification[];
+  analytics: ClinicAnalytics | null;
   settings: ClinicSettings;
+  staffAccounts: StaffAccount[];
+  auditLogs: AuditLogEntry[];
   toasts: ToastItem[];
 
   activeConversationId: string;
   setActiveConversationId: (id: string) => void;
-  openConversationForPatient: (patientId: string) => void;
+  selectConversation: (id: string) => Promise<void>;
+  openConversationForPatient: (patientId: string) => Promise<void>;
+  createConversation: (title: string, patientId?: string) => Promise<void>;
+  sendMessage: (
+    conversationId: string,
+    text: string,
+    attachment?: { name: string; type: 'pdf' | 'form' | 'location' }
+  ) => Promise<void>;
 
   appointmentModal: AppointmentModalDraft | null;
   openAppointmentModal: (draft: AppointmentModalDraft) => void;
@@ -69,73 +117,104 @@ interface ClinicContextValue {
   addToast: (toast: Omit<ToastItem, 'id'>) => void;
   dismissToast: (id: string) => void;
 
-  // Appointment actions
+  // Backend-connected operations
   saveAppointment: (
-    data: Omit<Appointment, 'id' | 'status'> & { id?: string; status?: AppointmentStatus }
-  ) => void;
-  updateAppointmentStatus: (id: string, status: AppointmentStatus) => void;
-  cancelAppointment: (id: string) => void;
-  remindAllExpectedToday: () => void;
-  remindSingleAppointment: (id: string) => void;
-
-  // Patient actions
-  savePatient: (data: Omit<Patient, 'id' | 'avatarColor'> & { id?: string }) => Patient;
-  updatePatientNotes: (patientId: string, notes: string) => void;
-  archivePatient: (patientId: string) => void;
-  deletePatient: (patientId: string) => void;
-
-  // Inbox actions
-  selectConversation: (id: string) => void;
-  sendMessage: (
-    conversationId: string,
-    text: string,
-    attachment?: { name: string; type: 'pdf' | 'form' | 'location' }
-  ) => void;
-
-  // Campaign actions
-  saveCampaign: (
-    data: Omit<Campaign, 'id' | 'sentCount' | 'readCount' | 'replyCount' | 'bookingsCount'> & {
+    data: Omit<Appointment, 'id' | 'status'> & {
       id?: string;
+      status?: AppointmentStatus;
     }
-  ) => void;
-  sendCampaignNow: (campaignId: string) => void;
-  scheduleCampaign: (campaignId: string, scheduledDate: string) => void;
+  ) => Promise<void>;
+  updateAppointmentStatus: (id: string, status: AppointmentStatus) => Promise<void>;
+  transitionVisitFlow: (
+    appointmentId: string,
+    targetStatus: Exclude<FlowStatus, 'EXPECTED'>,
+    consultationDetails?: {
+      chiefComplaint?: string;
+      clinicalNotes?: string;
+      diagnosis?: string;
+      followUpPlan?: string;
+    }
+  ) => Promise<void>;
+  cancelAppointment: (id: string) => Promise<void>;
+  remindAllExpectedToday: () => Promise<void>;
+  remindSingleAppointment: (id: string) => Promise<void>;
 
-  // Settings & Doctor actions
-  toggleDoctorAvailability: (doctorId: string) => void;
-  updateSettings: (next: ClinicSettings) => void;
+  savePatient: (
+    data: Omit<Patient, 'id' | 'avatarColor'> & { id?: string }
+  ) => Promise<Patient>;
+  updatePatientNotes: (patientId: string, notes: string) => Promise<void>;
+  archivePatient: (patientId: string) => Promise<void>;
 
-  // Notifications
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
+  saveCampaign: (data: {
+    id?: string;
+    name: string;
+    audience: string;
+    recipientCount: number;
+    status: CampaignStatus;
+    scheduledDate: string;
+    messageTemplate: string;
+  }) => Promise<void>;
+  executeCampaignNow: (campaignId: string) => Promise<void>;
+  scheduleCampaign: (campaignId: string, scheduledDate: string) => Promise<void>;
+  cancelCampaign: (campaignId: string) => Promise<void>;
 
-  // Computed helpers
+  registerDoctor: (data: {
+    name: string;
+    specialty: string;
+    room: string;
+    dailyCapacity: number;
+  }) => Promise<void>;
+  toggleDoctorAvailability: (doctorId: string) => Promise<void>;
+  updateDoctorSchedule: (
+    doctorId: string,
+    schedules: Array<Omit<DoctorSchedule, 'id' | 'doctorId'>>
+  ) => Promise<void>;
+
+  updateSettings: (next: ClinicSettings) => Promise<void>;
+  registerStaffUser: (data: {
+    name: string;
+    email: string;
+    password: string;
+    role: StaffRole;
+    specialty?: string;
+    room?: string;
+  }) => Promise<void>;
+  toggleStaffActive: (userId: string, active: boolean) => Promise<void>;
+
   totalUnreadMessages: number;
-  unreadNotificationsCount: number;
   getPatientById: (id: string) => Patient | undefined;
   getDoctorById: (id: string) => Doctor | undefined;
 }
 
 const ClinicContext = createContext<ClinicContextValue | undefined>(undefined);
 
-const AVATAR_TONES = ['#DCECE4', '#E3EEF3', '#EAF4EF', '#E6ECE8', '#E4EFEA', '#E1ECE7'];
-
 export function ClinicProvider({ children }: { children: React.ReactNode }) {
+  const [authStatus, setAuthStatus] = useState<AuthStateStatus>('loading');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [defaultAdmin, setDefaultAdmin] = useState<{ name: string; email: string }>({
+    name: 'Dickson Ndumia',
+    email: 'dicksonndumia19@gmail.com',
+  });
   const [activeRoute, setActiveRoute] = useState<NavRoute>('dashboard');
-  const [doctors, setDoctors] = useState<Doctor[]>(INITIAL_DOCTORS);
-  const [patients, setPatients] = useState<Patient[]>(INITIAL_PATIENTS);
-  const [appointments, setAppointments] = useState<Appointment[]>(INITIAL_APPOINTMENTS);
-  const [conversations, setConversations] = useState<Conversation[]>(INITIAL_CONVERSATIONS);
-  const [campaigns, setCampaigns] = useState<Campaign[]>(INITIAL_CAMPAIGNS);
-  const [notifications, setNotifications] = useState<ClinicNotification[]>(INITIAL_NOTIFICATIONS);
-  const [settings, setSettings] = useState<ClinicSettings>(INITIAL_SETTINGS);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [analytics, setAnalytics] = useState<ClinicAnalytics | null>(null);
+  const [settings, setSettings] = useState<ClinicSettings>(DEFAULT_SETTINGS);
+  const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  const [activeConversationId, setActiveConversationId] = useState<string>(
-    INITIAL_CONVERSATIONS[0].id
+  const [activeConversationId, setActiveConversationId] = useState<string>('');
+  const [appointmentModal, setAppointmentModal] =
+    useState<AppointmentModalDraft | null>(null);
+  const [patientModal, setPatientModal] = useState<PatientModalDraft | null>(
+    null
   );
-  const [appointmentModal, setAppointmentModal] = useState<AppointmentModalDraft | null>(null);
-  const [patientModal, setPatientModal] = useState<PatientModalDraft | null>(null);
   const [profilePatientId, setProfilePatientId] = useState<string | null>(null);
 
   const dismissToast = useCallback((id: string) => {
@@ -148,10 +227,171 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       setToasts((prev) => [...prev.slice(-3), { ...toast, id }]);
       setTimeout(() => {
         dismissToast(id);
-      }, 3800);
+      }, 4000);
     },
     [dismissToast]
   );
+
+  // Check initial bootstrap / auth state
+  useEffect(() => {
+    setOnUnauthorized(() => {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+    });
+
+    (async () => {
+      try {
+        const statusRes = await apiRequest<{
+          initialized: boolean;
+          defaultAdmin?: { name: string; email: string };
+        }>('/api/auth/status');
+        if (statusRes.defaultAdmin) {
+          setDefaultAdmin(statusRes.defaultAdmin);
+        }
+        if (!statusRes.initialized) {
+          setAuthStatus('setup_required');
+          return;
+        }
+        if (getAuthToken()) {
+          const me = await apiRequest<{ user: AuthUser }>('/api/auth/me');
+          setAuthUser(me.user);
+          setAuthStatus('authenticated');
+        } else {
+          setAuthStatus('unauthenticated');
+        }
+      } catch {
+        setAuthStatus('unauthenticated');
+      }
+    })();
+  }, []);
+
+  const refreshAllData = useCallback(async () => {
+    if (!getAuthToken()) return;
+    setIsLoadingData(true);
+    try {
+      const [
+        doctorsRes,
+        patientsRes,
+        appointmentsRes,
+        conversationsRes,
+        campaignsRes,
+        analyticsRes,
+        settingsRes,
+      ] = await Promise.all([
+        apiRequest<{ doctors: Doctor[] }>('/api/doctors'),
+        apiRequest<{ items: Patient[] }>('/api/patients?limit=100'),
+        apiRequest<{ appointments: Appointment[] }>('/api/appointments'),
+        apiRequest<{ conversations: Conversation[] }>('/api/conversations'),
+        apiRequest<{ campaigns: Campaign[] }>('/api/campaigns'),
+        apiRequest<ClinicAnalytics>('/api/analytics'),
+        apiRequest<{ settings: ClinicSettings | null }>('/api/settings'),
+      ]);
+
+      setDoctors(doctorsRes.doctors);
+      setPatients(patientsRes.items);
+      setAppointments(appointmentsRes.appointments);
+      setConversations(conversationsRes.conversations);
+      setCampaigns(campaignsRes.campaigns);
+      setAnalytics(analyticsRes);
+      if (settingsRes.settings) setSettings(settingsRes.settings);
+
+      setActiveConversationId((prev) => {
+        if (
+          prev &&
+          conversationsRes.conversations.some((c) => c.id === prev)
+        ) {
+          return prev;
+        }
+        return conversationsRes.conversations[0]?.id ?? '';
+      });
+
+      if (authUser?.role === 'ADMIN') {
+        const [usersRes, auditRes] = await Promise.all([
+          apiRequest<{ users: StaffAccount[] }>('/api/auth/users'),
+          apiRequest<{ logs: AuditLogEntry[] }>('/api/audit-logs'),
+        ]);
+        setStaffAccounts(usersRes.users);
+        setAuditLogs(auditRes.logs);
+      }
+    } catch (err) {
+      addToast({
+        title: 'Sync error',
+        description:
+          err instanceof Error ? err.message : 'Unable to fetch clinic data',
+        variant: 'error',
+      });
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [authUser?.role, addToast]);
+
+  useEffect(() => {
+    if (authStatus === 'authenticated') {
+      refreshAllData();
+    }
+  }, [authStatus, refreshAllData]);
+
+  const setupInitialAdmin = useCallback(
+    async (input: { name: string; email: string; password: string }) => {
+      const res = await apiRequest<{ token: string; user: AuthUser }>(
+        '/api/auth/setup',
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }
+      );
+      setAuthToken(res.token);
+      setAuthUser(res.user);
+      setAuthStatus('authenticated');
+      addToast({
+        title: `Welcome, ${res.user.name}`,
+        description: 'Clinic administrator account configured.',
+        variant: 'success',
+      });
+    },
+    [addToast]
+  );
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      const res = await apiRequest<{ token: string; user: AuthUser }>(
+        '/api/auth/login',
+        {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        }
+      );
+      setAuthToken(res.token);
+      setAuthUser(res.user);
+      setAuthStatus('authenticated');
+      setActiveRoute('dashboard');
+      addToast({
+        title: `Signed in as ${res.user.name}`,
+        description: `Role: ${res.user.role}`,
+        variant: 'success',
+      });
+    },
+    [addToast]
+  );
+
+  const logout = useCallback(async () => {
+    try {
+      await apiRequest('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore
+    }
+    setAuthToken(null);
+    setAuthUser(null);
+    setAuthStatus('unauthenticated');
+    setDoctors([]);
+    setPatients([]);
+    setAppointments([]);
+    setConversations([]);
+    setCampaigns([]);
+    setAnalytics(null);
+    setStaffAccounts([]);
+    setAuditLogs([]);
+  }, []);
 
   const getPatientById = useCallback(
     (id: string) => patients.find((p) => p.id === id),
@@ -180,446 +420,686 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const saveAppointment = useCallback(
-    (data: Omit<Appointment, 'id' | 'status'> & { id?: string; status?: AppointmentStatus }) => {
-      const patient = patients.find((p) => p.id === data.patientId);
-      if (data.id) {
-        setAppointments((prev) =>
-          prev.map((apt) =>
-            apt.id === data.id
-              ? {
-                  ...apt,
-                  ...data,
-                  status: data.status ?? apt.status,
-                }
-              : apt
-          )
-        );
-        addToast({
-          title: 'Appointment updated',
-          description: `${patient?.name ?? 'Patient'} · ${data.date} at ${data.time}`,
-          variant: 'success',
-        });
-      } else {
-        const newApt: Appointment = {
-          id: `apt-${Date.now()}`,
-          patientId: data.patientId,
-          doctorId: data.doctorId,
-          date: data.date,
-          time: data.time,
-          durationMinutes: data.durationMinutes,
-          category: data.category,
-          status: data.status ?? 'expected',
-          notes: data.notes,
-        };
-        setAppointments((prev) => [...prev, newApt]);
-        setPatients((prev) =>
-          prev.map((p) =>
-            p.id === data.patientId && data.date >= p.lastAppointment
-              ? { ...p, lastAppointment: data.date }
-              : p
-          )
-        );
-        addToast({
-          title: 'Appointment scheduled',
-          description: `${patient?.name ?? 'Patient'} booked for ${data.date} at ${data.time}`,
-          variant: 'success',
-        });
+    async (
+      data: Omit<Appointment, 'id' | 'status'> & {
+        id?: string;
+        status?: AppointmentStatus;
       }
-      setAppointmentModal(null);
+    ) => {
+      try {
+        if (data.id) {
+          await apiRequest(`/api/appointments/${data.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+          });
+          addToast({
+            title: 'Appointment updated',
+            description: `${data.date} at ${data.time}`,
+            variant: 'success',
+          });
+        } else {
+          await apiRequest('/api/appointments', {
+            method: 'POST',
+            body: JSON.stringify(data),
+          });
+          addToast({
+            title: 'Appointment scheduled',
+            description: `Booked for ${data.date} at ${data.time}`,
+            variant: 'success',
+          });
+        }
+        setAppointmentModal(null);
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Scheduling error',
+          description:
+            err instanceof Error ? err.message : 'Unable to save appointment',
+          variant: 'error',
+        });
+        throw err;
+      }
     },
-    [patients, addToast]
+    [addToast, refreshAllData]
   );
 
   const updateAppointmentStatus = useCallback(
-    (id: string, status: AppointmentStatus) => {
-      const nowTime = format(new Date(), 'HH:mm');
-      let targetPatientName = 'Patient';
-      setAppointments((prev) =>
-        prev.map((apt) => {
-          if (apt.id !== id) return apt;
-          const p = patients.find((pat) => pat.id === apt.patientId);
-          if (p) targetPatientName = p.name;
-          return {
-            ...apt,
-            status,
-            checkedInAt: status === 'waiting' ? nowTime : apt.checkedInAt,
-          };
-        })
-      );
-
-      const statusMessages: Record<AppointmentStatus, string> = {
-        expected: 'Moved back to Expected',
-        waiting: 'Checked into Waiting Room',
-        in_consultation: 'Called into consultation',
-        seen: 'Marked as Seen',
-        cancelled: 'Appointment cancelled',
-        no_show: 'Marked as No-show',
-      };
-
-      addToast({
-        title: targetPatientName,
-        description: statusMessages[status],
-        variant: status === 'cancelled' || status === 'no_show' ? 'warning' : 'success',
-      });
+    async (id: string, status: AppointmentStatus) => {
+      try {
+        await apiRequest(`/api/appointments/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        });
+        addToast({
+          title: 'Appointment updated',
+          description: `Status set to ${status}`,
+          variant: status === 'CANCELLED' || status === 'NO_SHOW' ? 'warning' : 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Action denied',
+          description:
+            err instanceof Error ? err.message : 'Could not update status',
+          variant: 'error',
+        });
+      }
     },
-    [patients, addToast]
+    [addToast, refreshAllData]
+  );
+
+  const transitionVisitFlow = useCallback(
+    async (
+      appointmentId: string,
+      targetStatus: Exclude<FlowStatus, 'EXPECTED'>,
+      consultationDetails?: {
+        chiefComplaint?: string;
+        clinicalNotes?: string;
+        diagnosis?: string;
+        followUpPlan?: string;
+      }
+    ) => {
+      try {
+        await apiRequest(`/api/flow/${appointmentId}/transition`, {
+          method: 'POST',
+          body: JSON.stringify({
+            targetStatus,
+            ...consultationDetails,
+          }),
+        });
+        const label =
+          targetStatus === 'WAITING'
+            ? 'Checked into Waiting Room'
+            : targetStatus === 'IN_CONSULTATION'
+            ? 'Consultation started'
+            : 'Consultation completed (Seen)';
+        addToast({
+          title: 'Patient flow updated',
+          description: label,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Flow transition rejected',
+          description:
+            err instanceof Error ? err.message : 'Invalid status transition',
+          variant: 'error',
+        });
+      }
+    },
+    [addToast, refreshAllData]
   );
 
   const cancelAppointment = useCallback(
-    (id: string) => {
-      updateAppointmentStatus(id, 'cancelled');
+    async (id: string) => {
+      try {
+        await apiRequest(`/api/appointments/${id}`, { method: 'DELETE' });
+        addToast({
+          title: 'Appointment cancelled',
+          description: 'Time slot freed for scheduling.',
+          variant: 'warning',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Cancel failed',
+          description:
+            err instanceof Error ? err.message : 'Unable to cancel appointment',
+          variant: 'error',
+        });
+      }
     },
-    [updateAppointmentStatus]
+    [addToast, refreshAllData]
   );
 
   const remindSingleAppointment = useCallback(
-    (id: string) => {
-      const timeLabel = format(new Date(), 'HH:mm');
-      let targetName = 'Patient';
-      setAppointments((prev) =>
-        prev.map((apt) => {
-          if (apt.id !== id) return apt;
-          const p = patients.find((pat) => pat.id === apt.patientId);
-          if (p) targetName = p.name;
-          return { ...apt, remindedAt: `Today ${timeLabel}` };
-        })
-      );
-      addToast({
-        title: 'WhatsApp reminder sent',
-        description: `Sent check-in reminder to ${targetName}`,
-        variant: 'success',
-      });
-    },
-    [patients, addToast]
-  );
-
-  const remindAllExpectedToday = useCallback(() => {
-    const timeLabel = format(new Date(), 'HH:mm');
-    const expectedToday = appointments.filter(
-      (a) => a.date === TODAY_STR && a.status === 'expected'
-    );
-    if (expectedToday.length === 0) {
-      addToast({
-        title: 'All caught up',
-        description: 'No pending expected appointments left to remind today.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    setAppointments((prev) =>
-      prev.map((apt) =>
-        apt.date === TODAY_STR && apt.status === 'expected'
-          ? { ...apt, remindedAt: `Today ${timeLabel}` }
-          : apt
-      )
-    );
-
-    addToast({
-      title: `Reminders sent to ${expectedToday.length} patients`,
-      description: 'WhatsApp appointment reminders queued and delivered.',
-      variant: 'success',
-    });
-  }, [appointments, addToast]);
-
-  const savePatient = useCallback(
-    (data: Omit<Patient, 'id' | 'avatarColor'> & { id?: string }) => {
-      if (data.id) {
-        let updated: Patient | undefined;
-        setPatients((prev) =>
-          prev.map((p) => {
-            if (p.id !== data.id) return p;
-            updated = { ...p, ...data };
-            return updated;
-          })
+    async (id: string) => {
+      try {
+        const res = await apiRequest<{ remindedAt: string }>(
+          '/api/appointments/remind-expected',
+          {
+            method: 'POST',
+            body: JSON.stringify({ appointmentId: id }),
+          }
         );
         addToast({
-          title: 'Patient record updated',
-          description: data.name,
+          title: 'Reminder logged',
+          description: `Recorded at ${res.remindedAt}`,
           variant: 'success',
         });
-        setPatientModal(null);
-        return updated ?? { ...data, id: data.id, avatarColor: AVATAR_TONES[0] };
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Reminder failed',
+          description:
+            err instanceof Error ? err.message : 'Could not log reminder',
+          variant: 'error',
+        });
       }
-
-      const newPatient: Patient = {
-        ...data,
-        id: `pat-${Date.now()}`,
-        avatarColor: AVATAR_TONES[patients.length % AVATAR_TONES.length],
-      };
-      setPatients((prev) => [newPatient, ...prev]);
-      addToast({
-        title: 'Patient added',
-        description: `${newPatient.name} registered at Northfield Family Clinic`,
-        variant: 'success',
-      });
-      setPatientModal(null);
-      return newPatient;
     },
-    [patients.length, addToast]
+    [addToast, refreshAllData]
+  );
+
+  const remindAllExpectedToday = useCallback(async () => {
+    try {
+      const res = await apiRequest<{ count: number; remindedAt: string }>(
+        '/api/appointments/remind-expected',
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }
+      );
+      addToast({
+        title:
+          res.count > 0
+            ? `Check-in reminders logged for ${res.count} patients`
+            : 'No pending expected visits today',
+        variant: res.count > 0 ? 'success' : 'info',
+      });
+      await refreshAllData();
+    } catch (err) {
+      addToast({
+        title: 'Action failed',
+        description:
+          err instanceof Error ? err.message : 'Could not record reminders',
+        variant: 'error',
+      });
+    }
+  }, [addToast, refreshAllData]);
+
+  const savePatient = useCallback(
+    async (data: Omit<Patient, 'id' | 'avatarColor'> & { id?: string }) => {
+      try {
+        let saved: Patient;
+        if (data.id) {
+          const res = await apiRequest<{ patient: Patient }>(
+            `/api/patients/${data.id}`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify(data),
+            }
+          );
+          saved = res.patient;
+          addToast({
+            title: 'Patient updated',
+            description: saved.name,
+            variant: 'success',
+          });
+        } else {
+          const res = await apiRequest<{ patient: Patient }>('/api/patients', {
+            method: 'POST',
+            body: JSON.stringify(data),
+          });
+          saved = res.patient;
+          addToast({
+            title: 'Patient registered',
+            description: saved.name,
+            variant: 'success',
+          });
+        }
+        setPatientModal(null);
+        await refreshAllData();
+        return saved;
+      } catch (err) {
+        addToast({
+          title: 'Patient save failed',
+          description:
+            err instanceof Error ? err.message : 'Unable to save patient',
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
   );
 
   const updatePatientNotes = useCallback(
-    (patientId: string, notes: string) => {
-      setPatients((prev) => prev.map((p) => (p.id === patientId ? { ...p, notes } : p)));
-      addToast({
-        title: 'Clinical notes saved',
-        variant: 'success',
-      });
+    async (patientId: string, notes: string) => {
+      try {
+        await apiRequest(`/api/patients/${patientId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ notes }),
+        });
+        addToast({ title: 'Patient notes saved', variant: 'success' });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Notes update failed',
+          description:
+            err instanceof Error ? err.message : 'Could not update notes',
+          variant: 'error',
+        });
+      }
     },
-    [addToast]
+    [addToast, refreshAllData]
   );
 
   const archivePatient = useCallback(
-    (patientId: string) => {
-      const target = patients.find((p) => p.id === patientId);
-      setPatients((prev) =>
-        prev.map((p) => (p.id === patientId ? { ...p, status: 'Archived' } : p))
-      );
-      if (profilePatientId === patientId) setProfilePatientId(null);
-      addToast({
-        title: 'Patient archived',
-        description: target?.name,
-        variant: 'info',
-      });
+    async (patientId: string) => {
+      try {
+        const res = await apiRequest<{ patient: Patient }>(
+          `/api/patients/${patientId}`,
+          { method: 'DELETE' }
+        );
+        if (profilePatientId === patientId) setProfilePatientId(null);
+        addToast({
+          title: 'Patient archived',
+          description: res.patient.name,
+          variant: 'info',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Archive failed',
+          description:
+            err instanceof Error ? err.message : 'Could not archive patient',
+          variant: 'error',
+        });
+      }
     },
-    [patients, profilePatientId, addToast]
+    [profilePatientId, addToast, refreshAllData]
   );
 
-  const deletePatient = useCallback(
-    (patientId: string) => {
-      const target = patients.find((p) => p.id === patientId);
-      setPatients((prev) => prev.filter((p) => p.id !== patientId));
-      setAppointments((prev) => prev.filter((a) => a.patientId !== patientId));
-      setConversations((prev) => prev.filter((c) => c.patientId !== patientId));
-      if (profilePatientId === patientId) setProfilePatientId(null);
-      addToast({
-        title: 'Patient deleted',
-        description: target?.name,
-        variant: 'warning',
-      });
+  const selectConversation = useCallback(
+    async (id: string) => {
+      setActiveConversationId(id);
+      try {
+        await apiRequest(`/api/conversations/${id}/read`, { method: 'POST' });
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === id
+              ? {
+                  ...c,
+                  unreadCount: 0,
+                  messages: c.messages.map((m) => ({ ...m, isRead: true })),
+                }
+              : c
+          )
+        );
+      } catch {
+        // ignore read sync error
+      }
     },
-    [patients, profilePatientId, addToast]
+    []
   );
-
-  const selectConversation = useCallback((id: string) => {
-    setActiveConversationId(id);
-    setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c))
-    );
-  }, []);
 
   const openConversationForPatient = useCallback(
-    (patientId: string) => {
-      const existing = conversations.find((c) => c.patientId === patientId);
-      if (existing) {
-        setActiveConversationId(existing.id);
-        setConversations((prev) =>
-          prev.map((c) => (c.id === existing.id ? { ...c, unreadCount: 0 } : c))
+    async (patientId: string) => {
+      try {
+        const res = await apiRequest<{ conversation: Conversation }>(
+          '/api/conversations',
+          {
+            method: 'POST',
+            body: JSON.stringify({ patientId }),
+          }
         );
-      } else {
-        const newConv: Conversation = {
-          id: `conv-${Date.now()}`,
-          patientId,
-          unreadCount: 0,
-          waitingReply: false,
-          lastUpdated: format(new Date(), 'HH:mm'),
-          messages: [],
-        };
-        setConversations((prev) => [newConv, ...prev]);
-        setActiveConversationId(newConv.id);
+        await refreshAllData();
+        await selectConversation(res.conversation.id);
+        setActiveRoute('inbox');
+      } catch (err) {
+        addToast({
+          title: 'Could not open thread',
+          description:
+            err instanceof Error ? err.message : 'Failed to create conversation',
+          variant: 'error',
+        });
       }
-      setActiveRoute('inbox');
     },
-    [conversations]
+    [refreshAllData, selectConversation, addToast]
+  );
+
+  const createConversation = useCallback(
+    async (title: string, patientId?: string) => {
+      try {
+        const res = await apiRequest<{ conversation: Conversation }>(
+          '/api/conversations',
+          {
+            method: 'POST',
+            body: JSON.stringify({ title, patientId }),
+          }
+        );
+        await refreshAllData();
+        setActiveConversationId(res.conversation.id);
+        addToast({ title: 'Internal thread created', variant: 'success' });
+      } catch (err) {
+        addToast({
+          title: 'Failed to create thread',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
+    },
+    [refreshAllData, addToast]
   );
 
   const sendMessage = useCallback(
-    (
+    async (
       conversationId: string,
       text: string,
       attachment?: { name: string; type: 'pdf' | 'form' | 'location' }
     ) => {
       const trimmed = text.trim();
       if (!trimmed && !attachment) return;
-      const nowTime = format(new Date(), 'HH:mm');
-      const newMsg: WhatsAppMessage = {
-        id: `m-${Date.now()}`,
-        sender: 'clinic',
-        text: trimmed || (attachment ? `Shared ${attachment.name}` : ''),
-        timestamp: nowTime,
-        status: 'delivered',
-        attachmentName: attachment?.name,
-        attachmentType: attachment?.type,
-      };
-
-      setConversations((prev) =>
-        prev.map((conv) =>
-          conv.id === conversationId
-            ? {
-                ...conv,
-                unreadCount: 0,
-                waitingReply: false,
-                lastUpdated: nowTime,
-                messages: [...conv.messages, newMsg],
-              }
-            : conv
-        )
-      );
+      try {
+        await apiRequest(`/api/conversations/${conversationId}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({
+            text: trimmed || (attachment ? `Shared ${attachment.name}` : ''),
+            attachmentName: attachment?.name,
+            attachmentType: attachment?.type,
+          }),
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Send failed',
+          description:
+            err instanceof Error ? err.message : 'Unable to send message',
+          variant: 'error',
+        });
+      }
     },
-    []
+    [refreshAllData, addToast]
   );
 
   const saveCampaign = useCallback(
-    (
-      data: Omit<Campaign, 'id' | 'sentCount' | 'readCount' | 'replyCount' | 'bookingsCount'> & {
-        id?: string;
-      }
-    ) => {
-      if (data.id) {
-        setCampaigns((prev) =>
-          prev.map((c) => (c.id === data.id ? { ...c, ...data } : c))
-        );
+    async (data: {
+      id?: string;
+      name: string;
+      audience: string;
+      recipientCount: number;
+      status: CampaignStatus;
+      scheduledDate: string;
+      messageTemplate: string;
+    }) => {
+      try {
+        if (data.id) {
+          await apiRequest(`/api/campaigns/${data.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+          });
+          addToast({
+            title: 'Campaign updated',
+            description: data.name,
+            variant: 'success',
+          });
+        } else {
+          await apiRequest('/api/campaigns', {
+            method: 'POST',
+            body: JSON.stringify(data),
+          });
+          addToast({
+            title: 'Campaign created',
+            description: data.name,
+            variant: 'success',
+          });
+        }
+        await refreshAllData();
+      } catch (err) {
         addToast({
-          title: 'Campaign updated',
-          description: data.name,
-          variant: 'success',
-        });
-      } else {
-        const newCamp: Campaign = {
-          ...data,
-          id: `camp-${Date.now()}`,
-          sentCount: 0,
-          readCount: 0,
-          replyCount: 0,
-          bookingsCount: 0,
-        };
-        setCampaigns((prev) => [newCamp, ...prev]);
-        addToast({
-          title: 'Campaign created',
-          description: data.name,
-          variant: 'success',
+          title: 'Campaign save failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
         });
       }
     },
-    [addToast]
+    [addToast, refreshAllData]
   );
 
-  const sendCampaignNow = useCallback(
-    (campaignId: string) => {
-      let campName = 'Campaign';
-      setCampaigns((prev) =>
-        prev.map((c) => {
-          if (c.id !== campaignId) return c;
-          campName = c.name;
-          const sent = c.recipientCount;
-          const read = Math.round(sent * 0.89);
-          const replies = Math.round(sent * 0.24);
-          const bookings = Math.round(sent * 0.12);
-          return {
-            ...c,
-            status: 'Completed',
-            scheduledDate: TODAY_STR,
-            sentCount: sent,
-            readCount: read,
-            replyCount: replies,
-            bookingsCount: bookings,
-          };
-        })
-      );
-      addToast({
-        title: 'Campaign dispatched',
-        description: `${campName} sent via WhatsApp Business`,
-        variant: 'success',
-      });
+  const executeCampaignNow = useCallback(
+    async (campaignId: string) => {
+      try {
+        const res = await apiRequest<{ campaign: Campaign }>(
+          `/api/campaigns/${campaignId}/execute`,
+          { method: 'POST' }
+        );
+        addToast({
+          title: 'Campaign marked completed',
+          description: `${res.campaign.name} recorded in database`,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Campaign action failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
     },
-    [addToast]
+    [addToast, refreshAllData]
   );
 
   const scheduleCampaign = useCallback(
-    (campaignId: string, scheduledDate: string) => {
-      let campName = 'Campaign';
-      setCampaigns((prev) =>
-        prev.map((c) => {
-          if (c.id !== campaignId) return c;
-          campName = c.name;
-          return {
-            ...c,
-            status: 'Scheduled',
-            scheduledDate,
-          };
-        })
-      );
-      addToast({
-        title: 'Campaign scheduled',
-        description: `${campName} set for ${scheduledDate}`,
-        variant: 'success',
-      });
+    async (campaignId: string, scheduledDate: string) => {
+      try {
+        await apiRequest(`/api/campaigns/${campaignId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'SCHEDULED', scheduledDate }),
+        });
+        addToast({
+          title: 'Campaign scheduled',
+          description: `Scheduled for ${scheduledDate}`,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Schedule failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
     },
-    [addToast]
+    [addToast, refreshAllData]
+  );
+
+  const cancelCampaign = useCallback(
+    async (campaignId: string) => {
+      try {
+        await apiRequest(`/api/campaigns/${campaignId}`, { method: 'DELETE' });
+        addToast({ title: 'Campaign cancelled', variant: 'warning' });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Cancel failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const registerDoctor = useCallback(
+    async (data: {
+      name: string;
+      specialty: string;
+      room: string;
+      dailyCapacity: number;
+    }) => {
+      try {
+        await apiRequest('/api/doctors', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title: 'Doctor registered',
+          description: data.name,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Registration failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
+    },
+    [addToast, refreshAllData]
   );
 
   const toggleDoctorAvailability = useCallback(
-    (doctorId: string) => {
-      setDoctors((prev) =>
-        prev.map((d) =>
-          d.id === doctorId ? { ...d, availableToday: !d.availableToday } : d
-        )
-      );
-      addToast({
-        title: 'Provider availability updated',
-        variant: 'info',
-      });
+    async (doctorId: string) => {
+      const doc = doctors.find((d) => d.id === doctorId);
+      if (!doc) return;
+      try {
+        await apiRequest(`/api/doctors/${doctorId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ availableToday: !doc.availableToday }),
+        });
+        addToast({
+          title: `${doc.name} marked ${!doc.availableToday ? 'On duty' : 'Off today'}`,
+          variant: 'info',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
     },
-    [addToast]
+    [doctors, addToast, refreshAllData]
+  );
+
+  const updateDoctorSchedule = useCallback(
+    async (
+      doctorId: string,
+      schedules: Array<Omit<DoctorSchedule, 'id' | 'doctorId'>>
+    ) => {
+      try {
+        await apiRequest(`/api/doctors/${doctorId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ schedules }),
+        });
+        addToast({ title: 'Working hours saved', variant: 'success' });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Schedule update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
+    },
+    [addToast, refreshAllData]
   );
 
   const updateSettings = useCallback(
-    (next: ClinicSettings) => {
-      setSettings(next);
-      addToast({
-        title: 'Clinic settings saved',
-        description: 'Preferences updated for Northfield Family Clinic.',
-        variant: 'success',
-      });
+    async (next: ClinicSettings) => {
+      try {
+        await apiRequest('/api/settings', {
+          method: 'PATCH',
+          body: JSON.stringify(next),
+        });
+        setSettings(next);
+        addToast({
+          title: 'Clinic settings saved',
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Settings update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
     },
-    [addToast]
+    [addToast, refreshAllData]
   );
 
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
-  }, []);
+  const registerStaffUser = useCallback(
+    async (data: {
+      name: string;
+      email: string;
+      password: string;
+      role: StaffRole;
+      specialty?: string;
+      room?: string;
+    }) => {
+      try {
+        await apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title: 'Staff account created',
+          description: `${data.name} (${data.role})`,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Registration failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
 
-  const markAllNotificationsRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  }, []);
+  const toggleStaffActive = useCallback(
+    async (userId: string, active: boolean) => {
+      try {
+        await apiRequest(`/api/auth/users/${userId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ active }),
+        });
+        addToast({
+          title: active ? 'Account enabled' : 'Account suspended',
+          variant: 'info',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+      }
+    },
+    [addToast, refreshAllData]
+  );
 
   const totalUnreadMessages = useMemo(
     () => conversations.reduce((acc, c) => acc + c.unreadCount, 0),
     [conversations]
   );
 
-  const unreadNotificationsCount = useMemo(
-    () => notifications.filter((n) => !n.read).length,
-    [notifications]
-  );
-
   const value: ClinicContextValue = {
+    authStatus,
+    authUser,
+    defaultAdmin,
+    setupInitialAdmin,
+    login,
+    logout,
     activeRoute,
     setActiveRoute,
+    isLoadingData,
+    refreshAllData,
     doctors,
     patients,
     appointments,
     conversations,
     campaigns,
-    notifications,
+    analytics,
     settings,
+    staffAccounts,
+    auditLogs,
     toasts,
     activeConversationId,
     setActiveConversationId,
+    selectConversation,
     openConversationForPatient,
+    createConversation,
+    sendMessage,
     appointmentModal,
     openAppointmentModal,
     closeAppointmentModal,
@@ -632,29 +1112,31 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     dismissToast,
     saveAppointment,
     updateAppointmentStatus,
+    transitionVisitFlow,
     cancelAppointment,
     remindAllExpectedToday,
     remindSingleAppointment,
     savePatient,
     updatePatientNotes,
     archivePatient,
-    deletePatient,
-    selectConversation,
-    sendMessage,
     saveCampaign,
-    sendCampaignNow,
+    executeCampaignNow,
     scheduleCampaign,
+    cancelCampaign,
+    registerDoctor,
     toggleDoctorAvailability,
+    updateDoctorSchedule,
     updateSettings,
-    markNotificationRead,
-    markAllNotificationsRead,
+    registerStaffUser,
+    toggleStaffActive,
     totalUnreadMessages,
-    unreadNotificationsCount,
     getPatientById,
     getDoctorById,
   };
 
-  return <ClinicContext.Provider value={value}>{children}</ClinicContext.Provider>;
+  return (
+    <ClinicContext.Provider value={value}>{children}</ClinicContext.Provider>
+  );
 }
 
 export function useClinic() {

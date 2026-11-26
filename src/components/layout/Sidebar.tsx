@@ -10,6 +10,7 @@ import {
   Settings,
   HeartPulse,
   X,
+  LogOut,
 } from 'lucide-react';
 import { NavRoute } from '../../types/clinic';
 import { useClinic } from '../../context/ClinicContext';
@@ -20,7 +21,11 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-const NAV_ITEMS: { id: NavRoute; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+const NAV_ITEMS: {
+  id: NavRoute;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'inbox', label: 'Inbox', icon: MessageSquare },
   { id: 'patients', label: 'Patients', icon: Users },
@@ -34,12 +39,16 @@ const NAV_ITEMS: { id: NavRoute; label: string; icon: React.ComponentType<{ clas
 export const NADIA_AVATAR = '/src/assets/images/avatar_nadia_admin_1795723058520.jpg';
 
 export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
-  const { activeRoute, setActiveRoute, totalUnreadMessages } = useClinic();
+  const { activeRoute, setActiveRoute, totalUnreadMessages, authUser, logout } =
+    useClinic();
 
   const handleNav = (id: NavRoute) => {
     setActiveRoute(id);
     onCloseMobile();
   };
+
+  const userName = authUser?.name ?? 'Staff';
+  const userRole = authUser?.role ?? 'ADMIN';
 
   return (
     <>
@@ -48,7 +57,6 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
         aria-label="Primary navigation"
         className="hidden lg:flex flex-col items-center justify-between w-[72px] shrink-0 bg-[#073C35] text-white py-4 select-none border-r border-[#0B6657]/40 z-30"
       >
-        {/* Top Clinic Logo */}
         <div className="flex flex-col items-center gap-6 w-full">
           <button
             type="button"
@@ -59,7 +67,6 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             <HeartPulse className="w-5 h-5 text-white" />
           </button>
 
-          {/* Navigation Icons */}
           <nav className="flex flex-col items-center gap-1.5 w-full px-2.5">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
@@ -90,7 +97,6 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     )}
                   </button>
 
-                  {/* Hover Tooltip */}
                   <div
                     role="tooltip"
                     className="pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-[#172B27] text-white text-xs font-medium whitespace-nowrap shadow-md z-50"
@@ -104,26 +110,42 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           </nav>
         </div>
 
-        {/* Bottom User Profile */}
-        <div className="relative group flex justify-center w-full px-2.5">
+        {/* Bottom Profile & Logout */}
+        <div className="flex flex-col items-center gap-2 w-full px-2.5">
+          <div className="relative group flex justify-center w-full">
+            <button
+              type="button"
+              onClick={() => handleNav('settings')}
+              aria-label={`${userName} — ${userRole}`}
+              className="rounded-full p-0.5 ring-2 ring-[#0B6657] hover:ring-[#20B875] transition-all cursor-pointer"
+            >
+              <Avatar
+                name={userName}
+                src={userName.toLowerCase().includes('nadia') ? NADIA_AVATAR : undefined}
+                size="sm"
+              />
+            </button>
+            <div
+              role="tooltip"
+              className="pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-[#172B27] text-white text-xs font-medium whitespace-nowrap shadow-md z-50"
+            >
+              {userName} · {userRole}
+            </div>
+          </div>
+
           <button
             type="button"
-            onClick={() => handleNav('settings')}
-            aria-label="Nadia — Clinic Manager"
-            className="rounded-full p-0.5 ring-2 ring-[#0B6657] hover:ring-[#20B875] transition-all cursor-pointer focus-visible:outline-none"
+            onClick={logout}
+            title="Sign out"
+            aria-label="Sign out"
+            className="w-9 h-9 rounded-xl text-[#9DBCB3] hover:text-white hover:bg-[#0B6657]/60 flex items-center justify-center transition-colors cursor-pointer"
           >
-            <Avatar name="Nadia" src={NADIA_AVATAR} size="sm" />
+            <LogOut className="w-4 h-4" />
           </button>
-          <div
-            role="tooltip"
-            className="pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-[#172B27] text-white text-xs font-medium whitespace-nowrap shadow-md z-50"
-          >
-            Nadia · Clinic Coordinator
-          </div>
         </div>
       </aside>
 
-      {/* Mobile / Tablet Slide-out Navigation Drawer */}
+      {/* Mobile / Tablet Drawer */}
       {mobileOpen && (
         <div
           className="fixed inset-0 z-50 lg:hidden flex"
@@ -146,7 +168,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     <p className="text-sm font-semibold text-white truncate">
                       Northfield Clinic
                     </p>
-                    <p className="text-[11px] text-[#9DBCB3]">Operations</p>
+                    <p className="text-[11px] text-[#9DBCB3]">{userRole}</p>
                   </div>
                 </div>
                 <button
@@ -190,17 +212,33 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
               </nav>
             </div>
 
-            <button
-              type="button"
-              onClick={() => handleNav('settings')}
-              className="flex items-center gap-3 pt-4 border-t border-[#0B6657] text-left cursor-pointer"
-            >
-              <Avatar name="Nadia" src={NADIA_AVATAR} size="sm" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-white truncate">Nadia</p>
-                <p className="text-xs text-[#9DBCB3] truncate">Clinic Coordinator</p>
-              </div>
-            </button>
+            <div className="pt-4 border-t border-[#0B6657] flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleNav('settings')}
+                className="flex items-center gap-2.5 text-left min-w-0 cursor-pointer"
+              >
+                <Avatar
+                  name={userName}
+                  src={userName.toLowerCase().includes('nadia') ? NADIA_AVATAR : undefined}
+                  size="sm"
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white truncate">
+                    {userName}
+                  </p>
+                  <p className="text-[11px] text-[#9DBCB3] truncate">{userRole}</p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={logout}
+                aria-label="Sign out"
+                className="p-2 rounded-lg text-[#9DBCB3] hover:text-white hover:bg-[#0B6657] cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </aside>
         </div>
       )}

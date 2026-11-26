@@ -14,36 +14,36 @@ import {
   Users,
 } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
-import { TODAY_STR } from '../../data/mockClinicData';
-import { Appointment, AppointmentStatus } from '../../types/clinic';
+import { Appointment, FlowStatus } from '../../types/clinic';
 import { Avatar } from '../../components/ui/Avatar';
+import { Modal } from '../../components/ui/Modal';
 
 const FLOW_COLUMNS: {
-  key: AppointmentStatus;
+  key: FlowStatus;
   title: string;
   subtitle: string;
   emptyText: string;
 }[] = [
   {
-    key: 'expected',
+    key: 'EXPECTED',
     title: 'Expected',
     subtitle: 'Scheduled arrivals',
     emptyText: 'All scheduled patients have arrived.',
   },
   {
-    key: 'waiting',
+    key: 'WAITING',
     title: 'Waiting room',
     subtitle: 'Checked in at desk',
     emptyText: 'No patients currently waiting.',
   },
   {
-    key: 'in_consultation',
+    key: 'IN_CONSULTATION',
     title: 'In consultation',
     subtitle: 'With provider now',
     emptyText: 'No consultations active right now.',
   },
   {
-    key: 'seen',
+    key: 'SEEN',
     title: 'Seen',
     subtitle: 'Completed today',
     emptyText: 'Completed visits will appear here.',
@@ -52,14 +52,17 @@ const FLOW_COLUMNS: {
 
 export function DashboardPage() {
   const {
+    authUser,
     appointments,
     doctors,
-    conversations,
+    analytics,
+    totalUnreadMessages,
     getPatientById,
     getDoctorById,
     openAppointmentModal,
     remindAllExpectedToday,
     remindSingleAppointment,
+    transitionVisitFlow,
     updateAppointmentStatus,
     setActiveRoute,
     openConversationForPatient,
@@ -68,28 +71,44 @@ export function DashboardPage() {
 
   const [doctorFilter, setDoctorFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [completeModalApt, setCompleteModalApt] = useState<Appointment | null>(
+    null
+  );
+  const [diagnosisDraft, setDiagnosisDraft] = useState('');
+  const [notesDraft, setNotesDraft] = useState('');
+  const [followUpDraft, setFollowUpDraft] = useState('');
 
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
   const todayFormatted = format(new Date(), 'EEEE, d MMMM yyyy');
 
   const todayAppointments = useMemo(
     () =>
       appointments
-        .filter((a) => a.date === TODAY_STR)
+        .filter(
+          (a) =>
+            a.date === todayStr &&
+            a.status !== 'CANCELLED' &&
+            a.status !== 'NO_SHOW'
+        )
         .sort((a, b) => a.time.localeCompare(b.time)),
-    [appointments]
+    [appointments, todayStr]
   );
 
-  // Metrics calculations
-  const activeTodayCount = todayAppointments.filter((a) => a.status !== 'cancelled').length;
-  const seenTodayCount = todayAppointments.filter((a) => a.status === 'seen').length;
+  // Live metrics from database /api/analytics
+  const totalToday = analytics?.totalAppointmentsToday ?? todayAppointments.length;
+  const seenToday =
+    analytics?.completedAppointmentsToday ??
+    todayAppointments.filter((a) => a.visit?.flowStatus === 'SEEN').length;
   const completionPct =
-    activeTodayCount > 0 ? Math.round((seenTodayCount / activeTodayCount) * 100) : 0;
-  const waitingCount = todayAppointments.filter((a) => a.status === 'waiting').length;
-  const unreadWhatsAppCount = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
-  const noShowCount = todayAppointments.filter((a) => a.status === 'no_show').length;
-  const noShowRate =
-    activeTodayCount > 0 ? ((noShowCount / activeTodayCount) * 100).toFixed(1) : '0.0';
-  const expectedCount = todayAppointments.filter((a) => a.status === 'expected').length;
+    totalToday > 0 ? Math.round((seenToday / totalToday) * 100) : 0;
+  const waitingCount = analytics?.waitingCount ?? 0;
+  const noShowRate = (analytics?.noShowRate ?? 0).toFixed(1);
+  const noShowCount = analytics?.noShowCountToday ?? 0;
+  const avgWaitMinutes = analytics?.averageWaitMinutes ?? 0;
+
+  const expectedCount = todayAppointments.filter(
+    (a) => (a.visit?.flowStatus ?? 'EXPECTED') === 'EXPECTED'
+  ).length;
 
   const filteredToday = useMemo(() => {
     return todayAppointments.filter((apt) => {
@@ -108,55 +127,80 @@ export function DashboardPage() {
     });
   }, [todayAppointments, doctorFilter, searchQuery, getPatientById, getDoctorById]);
 
-  const renderFlowAction = (apt: Appointment) => {
-    switch (apt.status) {
-      case 'expected':
+  const canCheckIn =
+    authUser?.role === 'ADMIN' || authUser?.role === 'RECEPTIONIST';
+  const canConsult = authUser?.role === 'ADMIN' || authUser?.role === 'DOCTOR';
+
+  const openCompleteConsultation = (apt: Appointment) => {
+    setDiagnosisDraft(apt.consultation?.diagnosis ?? '');
+    setNotesDraft(apt.consultation?.clinicalNotes ?? '');
+    setFollowUpDraft(apt.consultation?.followUpPlan ?? '');
+    setCompleteModalApt(apt);
+  };
+
+  const renderFlowAction = (apt: Appointment, flowStatus: FlowStatus) => {
+    switch (flowStatus) {
+      case 'EXPECTED':
         return (
           <div className="flex items-center gap-1.5 pt-2.5 mt-2.5 border-t border-[#E2EAE5]">
-            <button
-              type="button"
-              onClick={() => updateAppointmentStatus(apt.id, 'waiting')}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <UserCheck className="w-3.5 h-3.5" />
-              Check in
-            </button>
-            <button
-              type="button"
-              onClick={() => remindSingleAppointment(apt.id)}
-              title="Send WhatsApp reminder"
-              className="px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#EAF4EF] text-[#0B6657] text-xs font-medium transition-colors cursor-pointer"
-            >
-              Remind
-            </button>
-            <button
-              type="button"
-              onClick={() => updateAppointmentStatus(apt.id, 'no_show')}
-              title="Mark as no-show"
-              aria-label="Mark as no-show"
-              className="p-1.5 rounded-lg border border-[#E2EAE5] hover:bg-red-50 hover:text-red-700 text-[#84938D] transition-colors cursor-pointer"
-            >
-              <UserX className="w-3.5 h-3.5" />
-            </button>
+            {canCheckIn ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => transitionVisitFlow(apt.id, 'WAITING')}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  Check in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remindSingleAppointment(apt.id)}
+                  title="Log visit reminder"
+                  className="px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#EAF4EF] text-[#0B6657] text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Remind
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateAppointmentStatus(apt.id, 'NO_SHOW')}
+                  title="Mark as no-show"
+                  aria-label="Mark as no-show"
+                  className="p-1.5 rounded-lg border border-[#E2EAE5] hover:bg-red-50 hover:text-red-700 text-[#84938D] transition-colors cursor-pointer"
+                >
+                  <UserX className="w-3.5 h-3.5" />
+                </button>
+              </>
+            ) : (
+              <span className="text-[11px] text-[#84938D]">
+                Awaiting front desk check-in
+              </span>
+            )}
           </div>
         );
 
-      case 'waiting':
+      case 'WAITING':
         return (
           <div className="flex items-center gap-1.5 pt-2.5 mt-2.5 border-t border-[#E2EAE5]">
-            <button
-              type="button"
-              onClick={() => updateAppointmentStatus(apt.id, 'in_consultation')}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B6657] hover:bg-[#073C35] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Stethoscope className="w-3.5 h-3.5" />
-              Call patient
-            </button>
+            {canConsult ? (
+              <button
+                type="button"
+                onClick={() => transitionVisitFlow(apt.id, 'IN_CONSULTATION')}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B6657] hover:bg-[#073C35] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <Stethoscope className="w-3.5 h-3.5" />
+                Call patient
+              </button>
+            ) : (
+              <span className="flex-1 text-[11px] text-[#0B6657] font-medium">
+                Ready for provider
+              </span>
+            )}
             <button
               type="button"
               onClick={() => openConversationForPatient(apt.patientId)}
-              title="Message on WhatsApp"
-              aria-label="Message on WhatsApp"
+              title="Open internal care thread"
+              aria-label="Open internal care thread"
               className="p-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#EAF4EF] text-[#0B6657] transition-colors cursor-pointer"
             >
               <MessageSquare className="w-3.5 h-3.5" />
@@ -164,17 +208,23 @@ export function DashboardPage() {
           </div>
         );
 
-      case 'in_consultation':
+      case 'IN_CONSULTATION':
         return (
           <div className="flex items-center gap-1.5 pt-2.5 mt-2.5 border-t border-[#E2EAE5]">
-            <button
-              type="button"
-              onClick={() => updateAppointmentStatus(apt.id, 'seen')}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#20B875] hover:bg-[#199e63] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Mark as seen
-            </button>
+            {canConsult ? (
+              <button
+                type="button"
+                onClick={() => openCompleteConsultation(apt)}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#20B875] hover:bg-[#199e63] text-white text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Mark as seen
+              </button>
+            ) : (
+              <span className="flex-1 text-[11px] text-[#0B6657] font-medium">
+                Consultation in progress
+              </span>
+            )}
             <button
               type="button"
               onClick={() => openAppointmentModal({ mode: 'edit', appointment: apt })}
@@ -185,7 +235,7 @@ export function DashboardPage() {
           </div>
         );
 
-      case 'seen':
+      case 'SEEN':
         return (
           <div className="flex items-center justify-between gap-2 pt-2.5 mt-2.5 border-t border-[#E2EAE5]">
             <button
@@ -211,11 +261,10 @@ export function DashboardPage() {
             </button>
           </div>
         );
-
-      default:
-        return null;
     }
   };
+
+  const firstName = (authUser?.name ?? 'Dickson').split(' ')[0];
 
   return (
     <div className="space-y-6">
@@ -223,22 +272,24 @@ export function DashboardPage() {
       <section className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold text-[#172B27] tracking-tight">
-            Good morning, Nadia
+            Good morning, {firstName}
           </h1>
           <p className="text-xs sm:text-sm text-[#84938D] mt-0.5">
-            {todayFormatted} · Northfield Family Clinic daily operations
+            {todayFormatted} · Northfield Family Clinic ({authUser?.role ?? 'STAFF'})
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={remindAllExpectedToday}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#E2EAE5] bg-white hover:bg-[#EAF4EF] text-[#073C35] text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <BellRing className="w-4 h-4 text-[#0B6657]" />
-            <span>Remind all ({expectedCount})</span>
-          </button>
+          {canCheckIn && (
+            <button
+              type="button"
+              onClick={remindAllExpectedToday}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#E2EAE5] bg-white hover:bg-[#EAF4EF] text-[#073C35] text-xs sm:text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <BellRing className="w-4 h-4 text-[#0B6657]" />
+              <span>Remind all ({expectedCount})</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -251,7 +302,7 @@ export function DashboardPage() {
         </div>
       </section>
 
-      {/* Four Compact Metric Cards */}
+      {/* Four Compact Metric Cards (Computed from DB /api/analytics) */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4 sm:p-5 shadow-2xs">
           <div className="flex items-center justify-between">
@@ -262,10 +313,10 @@ export function DashboardPage() {
           </div>
           <div className="mt-3 flex items-baseline justify-between gap-2">
             <p className="text-2xl font-semibold text-[#172B27] tabular-nums">
-              {activeTodayCount}
+              {totalToday}
             </p>
             <p className="text-xs font-medium text-[#0B6657] tabular-nums">
-              {seenTodayCount} seen · {completionPct}%
+              {seenToday} seen · {completionPct}%
             </p>
           </div>
           <div className="mt-3 h-1.5 w-full rounded-full bg-[#EAF4EF] overflow-hidden">
@@ -294,7 +345,10 @@ export function DashboardPage() {
             </p>
           </div>
           <p className="mt-3 text-xs text-[#84938D]">
-            Avg wait time · <span className="text-[#172B27] font-medium tabular-nums">8 min</span>
+            Avg wait time ·{' '}
+            <span className="text-[#172B27] font-medium tabular-nums">
+              {avgWaitMinutes} min
+            </span>
           </p>
         </div>
 
@@ -305,7 +359,7 @@ export function DashboardPage() {
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-[#84938D]">
-              Unread on WhatsApp
+              Unread staff messages
             </span>
             <span className="w-8 h-8 rounded-xl bg-[#EAF4EF] text-[#20B875] flex items-center justify-center">
               <MessageSquare className="w-4 h-4" />
@@ -313,14 +367,14 @@ export function DashboardPage() {
           </div>
           <div className="mt-3 flex items-baseline justify-between gap-2">
             <p className="text-2xl font-semibold text-[#172B27] tabular-nums">
-              {unreadWhatsAppCount}
+              {totalUnreadMessages}
             </p>
             <span className="text-xs font-medium text-[#0B6657]">
               Open inbox →
             </span>
           </div>
           <p className="mt-3 text-xs text-[#84938D]">
-            {conversations.filter((c) => c.waitingReply).length} conversations awaiting reply
+            Internal care coordination threads
           </p>
         </button>
 
@@ -340,7 +394,10 @@ export function DashboardPage() {
             </p>
           </div>
           <p className="mt-3 text-xs text-[#84938D]">
-            Clinic target · <span className="text-[#0B6657] font-medium tabular-nums">&lt; 5.0%</span>
+            Active panel ·{' '}
+            <span className="text-[#0B6657] font-medium tabular-nums">
+              {analytics?.totalRegisteredPatients ?? 0} patients
+            </span>
           </p>
         </div>
       </section>
@@ -353,7 +410,7 @@ export function DashboardPage() {
               Today’s patient flow
             </h2>
             <p className="text-xs text-[#84938D]">
-              Track arrivals from expected check-in through completed visits
+              EXPECTED → WAITING → IN CONSULTATION → SEEN (role-enforced workflow)
             </p>
           </div>
 
@@ -388,14 +445,15 @@ export function DashboardPage() {
         {/* 4 Flow Columns */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
           {FLOW_COLUMNS.map((col) => {
-            const colItems = filteredToday.filter((a) => a.status === col.key);
+            const colItems = filteredToday.filter(
+              (a) => (a.visit?.flowStatus ?? 'EXPECTED') === col.key
+            );
 
             return (
               <div
                 key={col.key}
                 className="bg-white/70 rounded-2xl border border-[#E2EAE5] p-3.5 space-y-3"
               >
-                {/* Column Header */}
                 <div className="flex items-center justify-between px-1">
                   <div>
                     <h3 className="text-sm font-semibold text-[#172B27]">
@@ -408,7 +466,6 @@ export function DashboardPage() {
                   </span>
                 </div>
 
-                {/* Patient Cards */}
                 {colItems.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[#E2EAE5] bg-white/60 py-8 px-4 text-center">
                     <p className="text-xs text-[#84938D]">{col.emptyText}</p>
@@ -420,16 +477,24 @@ export function DashboardPage() {
                       const doctor = getDoctorById(apt.doctorId);
                       if (!patient) return null;
 
+                      const checkedTime = apt.visit?.checkedInAt
+                        ? format(new Date(apt.visit.checkedInAt), 'HH:mm')
+                        : null;
+
                       const statusLabel =
-                        apt.status === 'expected'
+                        col.key === 'EXPECTED'
                           ? apt.remindedAt
                             ? `Reminded · ${apt.remindedAt}`
-                            : 'Scheduled'
-                          : apt.status === 'waiting'
-                          ? `Checked in ${apt.checkedInAt ?? ''}`
-                          : apt.status === 'in_consultation'
+                            : apt.status
+                          : col.key === 'WAITING'
+                          ? checkedTime
+                            ? `Checked in ${checkedTime}`
+                            : 'Checked in'
+                          : col.key === 'IN_CONSULTATION'
                           ? `${doctor?.room ?? 'In room'}`
-                          : 'Visit completed';
+                          : apt.visit?.waitingMinutes != null
+                          ? `Wait ${apt.visit.waitingMinutes}m · Done`
+                          : 'Completed';
 
                       return (
                         <article
@@ -464,12 +529,12 @@ export function DashboardPage() {
 
                           <div className="mt-2.5 flex items-center justify-between text-xs text-[#84938D]">
                             <span className="truncate">{doctor?.name ?? 'Provider'}</span>
-                            <span className="shrink-0 text-[11px] text-[#0B6657] font-medium">
+                            <span className="shrink-0 text-[11px] text-[#0B6657] font-medium tabular-nums">
                               {statusLabel}
                             </span>
                           </div>
 
-                          {renderFlowAction(apt)}
+                          {renderFlowAction(apt, col.key)}
                         </article>
                       );
                     })}
@@ -480,6 +545,85 @@ export function DashboardPage() {
           })}
         </div>
       </section>
+
+      {/* Consultation Completion Modal */}
+      <Modal
+        open={Boolean(completeModalApt)}
+        onClose={() => setCompleteModalApt(null)}
+        title="Complete consultation"
+        subtitle={
+          completeModalApt
+            ? `${getPatientById(completeModalApt.patientId)?.name ?? 'Patient'} · Record visit summary`
+            : undefined
+        }
+        maxWidthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+              Diagnosis / assessment
+            </label>
+            <input
+              type="text"
+              value={diagnosisDraft}
+              onChange={(e) => setDiagnosisDraft(e.target.value)}
+              placeholder="e.g. Routine wellness evaluation, BP stable"
+              className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+              Clinical notes
+            </label>
+            <textarea
+              rows={3}
+              value={notesDraft}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              placeholder="Examination findings, prescriptions, or instructions..."
+              className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+              Follow-up plan
+            </label>
+            <input
+              type="text"
+              value={followUpDraft}
+              onChange={(e) => setFollowUpDraft(e.target.value)}
+              placeholder="e.g. Return in 3 months for lipid re-check"
+              className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E2EAE5]">
+            <button
+              type="button"
+              onClick={() => setCompleteModalApt(null)}
+              className="px-4 py-2 rounded-xl border border-[#E2EAE5] text-xs font-medium text-[#172B27] cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!completeModalApt) return;
+                await transitionVisitFlow(completeModalApt.id, 'SEEN', {
+                  diagnosis: diagnosisDraft,
+                  clinicalNotes: notesDraft,
+                  followUpPlan: followUpDraft,
+                });
+                setCompleteModalApt(null);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#20B875] hover:bg-[#199e63] text-white text-xs font-medium cursor-pointer"
+            >
+              Mark as seen
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

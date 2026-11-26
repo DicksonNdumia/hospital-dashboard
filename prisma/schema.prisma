@@ -1,0 +1,289 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique // ADMIN | RECEPTIONIST | DOCTOR
+  description String
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model User {
+  id                  String         @id @default(cuid())
+  email               String         @unique
+  name                String
+  passwordHash        String
+  active              Boolean        @default(true)
+  roleId              String
+  role                Role           @relation(fields: [roleId], references: [id])
+  doctorProfile       Doctor?
+  sessions            Session[]
+  createdAppointments Appointment[]  @relation("AppointmentCreatedBy")
+  updatedAppointments Appointment[]  @relation("AppointmentUpdatedBy")
+  campaignsCreated    Campaign[]     @relation("CampaignCreatedBy")
+  messagesSent        Message[]      @relation("MessageSender")
+  auditLogs           AuditLog[]     @relation("AuditActor")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([roleId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Doctor {
+  id             String           @id @default(cuid())
+  userId         String?          @unique
+  user           User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name           String
+  specialty      String
+  room           String
+  avatarUrl      String?
+  initials       String
+  color          String           @default("#0B6657")
+  availableToday Boolean          @default(true)
+  dailyCapacity  Int              @default(12)
+  schedules      DoctorSchedule[]
+  patients       Patient[]
+  appointments   Appointment[]
+  visits         PatientVisit[]
+  consultations  Consultation[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model DoctorSchedule {
+  id        String   @id @default(cuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek Int      // 0 = Sunday ... 6 = Saturday
+  startTime String   // HH:mm
+  endTime   String   // HH:mm
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([doctorId, dayOfWeek])
+  @@index([doctorId])
+}
+
+model Patient {
+  id                 String              @id @default(cuid())
+  name               String
+  phone              String
+  email              String              @unique
+  dateOfBirth        String
+  insuranceProvider  String
+  memberId           String
+  assignedDoctorId   String
+  assignedDoctor     Doctor              @relation(fields: [assignedDoctorId], references: [id])
+  status             String              @default("Active") // Active | New | Follow-up | Archived
+  lastAppointment    String
+  tags               String              @default("[]") // JSON array string
+  notes              String              @default("")
+  avatarColor        String              @default("#DCECE4")
+  archivedAt         DateTime?
+  appointments       Appointment[]
+  visits             PatientVisit[]
+  consultations      Consultation[]
+  campaignRecipients CampaignRecipient[]
+  conversations      Conversation[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([assignedDoctorId])
+  @@index([status])
+  @@index([name])
+}
+
+model Appointment {
+  id              String        @id @default(cuid())
+  patientId       String
+  patient         Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId        String
+  doctor          Doctor        @relation(fields: [doctorId], references: [id])
+  date            String        // YYYY-MM-DD
+  time            String        // HH:mm
+  durationMinutes Int           @default(30)
+  category        String
+  status          String        @default("SCHEDULED") // SCHEDULED | CONFIRMED | CANCELLED | COMPLETED | NO_SHOW
+  notes           String?
+  remindedAt      String?
+  createdById     String?
+  createdBy       User?         @relation("AppointmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById     String?
+  updatedBy       User?         @relation("AppointmentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  visit           PatientVisit?
+  consultation    Consultation?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([date, doctorId])
+  @@index([patientId, date])
+  @@index([status])
+}
+
+model PatientVisit {
+  id                  String        @id @default(cuid())
+  appointmentId       String        @unique
+  appointment         Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  patientId           String
+  patient             Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId            String
+  doctor              Doctor        @relation(fields: [doctorId], references: [id])
+  flowStatus          String        @default("EXPECTED") // EXPECTED | WAITING | IN_CONSULTATION | SEEN
+  expectedAt          DateTime      @default(now())
+  checkedInAt         DateTime?
+  consultationStartAt DateTime?
+  completedAt         DateTime?
+  waitingMinutes      Int?
+  consultation        Consultation?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([flowStatus])
+  @@index([patientId])
+  @@index([doctorId])
+}
+
+model Consultation {
+  id             String       @id @default(cuid())
+  visitId        String       @unique
+  visit          PatientVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  appointmentId  String       @unique
+  appointment    Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         Doctor       @relation(fields: [doctorId], references: [id])
+  patientId      String
+  patient        Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  chiefComplaint String       @default("")
+  clinicalNotes  String       @default("")
+  diagnosis      String       @default("")
+  followUpPlan   String       @default("")
+  startedAt      DateTime     @default(now())
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([doctorId])
+  @@index([patientId])
+}
+
+model Campaign {
+  id              String              @id @default(cuid())
+  name            String
+  audience        String
+  recipientCount  Int                 @default(0)
+  status          String              @default("DRAFT") // DRAFT | SCHEDULED | COMPLETED | CANCELLED
+  scheduledDate   String
+  messageTemplate String
+  sentCount       Int                 @default(0)
+  readCount       Int                 @default(0)
+  replyCount      Int                 @default(0)
+  bookingsCount   Int                 @default(0)
+  createdById     String?
+  createdBy       User?               @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients      CampaignRecipient[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([status])
+}
+
+model CampaignRecipient {
+  id             String    @id @default(cuid())
+  campaignId     String
+  campaign       Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  deliveryStatus String    @default("PENDING") // PENDING | SENT | READ | REPLIED | BOOKED
+  sentAt         DateTime?
+  readAt         DateTime?
+  repliedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([campaignId, patientId])
+  @@index([campaignId])
+}
+
+model Conversation {
+  id           String    @id @default(cuid())
+  title        String
+  patientId    String?
+  patient      Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  waitingReply Boolean   @default(false)
+  lastUpdated  DateTime  @default(now())
+  messages     Message[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([patientId])
+  @@index([lastUpdated])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String?
+  sender         User?        @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+  senderName     String
+  senderRole     String       @default("STAFF")
+  text           String
+  attachmentName String?
+  attachmentType String?
+  isRead         Boolean      @default(false)
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([isRead])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorEmail String
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  details    String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model ClinicSetting {
+  id                         String   @id @default("default")
+  clinicName                 String   @default("Northfield Family Clinic")
+  address                    String   @default("410 Northfield Avenue, Suite 200")
+  phone                      String   @default("+1 (555) 200-4800")
+  email                      String   @default("reception@northfieldclinic.org")
+  openingHours               String   @default("Mon-Fri 8:00 AM - 6:00 PM | Sat 9:00 AM - 1:00 PM")
+  autoReminder24h            Boolean  @default(true)
+  autoReminder2h             Boolean  @default(true)
+  includeParkingNote         Boolean  @default(true)
+  defaultAppointmentDuration Int      @default(30)
+  updatedAt                  DateTime @updatedAt
+}

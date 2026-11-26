@@ -19,7 +19,6 @@ import {
 import { useClinic } from '../../context/ClinicContext';
 import { Appointment, AppointmentCategory } from '../../types/clinic';
 import { Avatar } from '../../components/ui/Avatar';
-import { NEXT_MONDAY_STR, TODAY_STR } from '../../data/mockClinicData';
 
 type CalendarView = 'day' | 'week' | 'month';
 
@@ -32,7 +31,18 @@ const CATEGORY_STYLES: Record<AppointmentCategory, string> = {
   'Urgent Visit': 'bg-[#FDECEC] border-[#F0C2C2] text-[#842029]',
 };
 
-const HOURS = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+const HOURS = [
+  '08:00',
+  '09:00',
+  '10:00',
+  '11:00',
+  '12:00',
+  '13:00',
+  '14:00',
+  '15:00',
+  '16:00',
+  '17:00',
+];
 
 export function SchedulePage() {
   const {
@@ -47,13 +57,19 @@ export function SchedulePage() {
   const [cursorDate, setCursorDate] = useState<Date>(() => new Date());
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('all');
 
+  const today = new Date();
+  const todayStr = format(today, 'yyyy-MM-dd');
+  const nextMondayStr = format(
+    addDays(startOfWeek(today, { weekStartsOn: 1 }), 7),
+    'yyyy-MM-dd'
+  );
+
   const weekStart = startOfWeek(cursorDate, { weekStartsOn: 1 });
   const weekDays = useMemo(
     () => Array.from({ length: 6 }, (_, i) => addDays(weekStart, i)),
     [weekStart]
   );
 
-  // Summary metrics
   const currentWeekKeys = useMemo(
     () => new Set(weekDays.map((d) => format(d, 'yyyy-MM-dd'))),
     [weekDays]
@@ -64,7 +80,7 @@ export function SchedulePage() {
       appointments.filter(
         (a) =>
           currentWeekKeys.has(a.date) &&
-          a.status !== 'cancelled' &&
+          a.status !== 'CANCELLED' &&
           (selectedDoctorId === 'all' || a.doctorId === selectedDoctorId)
       ),
     [appointments, currentWeekKeys, selectedDoctorId]
@@ -85,8 +101,8 @@ export function SchedulePage() {
   const openSlots = Math.max(0, weeklyCapacity - weekAppointments.length);
   const confirmedMondayCount = appointments.filter(
     (a) =>
-      a.date === NEXT_MONDAY_STR &&
-      a.status !== 'cancelled' &&
+      a.date === nextMondayStr &&
+      a.status !== 'CANCELLED' &&
       (selectedDoctorId === 'all' || a.doctorId === selectedDoctorId)
   ).length;
 
@@ -94,7 +110,7 @@ export function SchedulePage() {
     () =>
       appointments.filter(
         (a) =>
-          a.status !== 'cancelled' &&
+          a.status !== 'CANCELLED' &&
           (selectedDoctorId === 'all' || a.doctorId === selectedDoctorId)
       ),
     [appointments, selectedDoctorId]
@@ -123,7 +139,8 @@ export function SchedulePage() {
     const patient = getPatientById(apt.patientId);
     const doctor = getDoctorById(apt.doctorId);
     const tone =
-      CATEGORY_STYLES[apt.category] ?? 'bg-[#EAF4EF] border-[#E2EAE5] text-[#172B27]';
+      CATEGORY_STYLES[apt.category as AppointmentCategory] ??
+      'bg-[#EAF4EF] border-[#E2EAE5] text-[#172B27]';
 
     return (
       <button
@@ -134,9 +151,7 @@ export function SchedulePage() {
       >
         <div className="flex items-center justify-between gap-1 text-[11px] font-semibold tabular-nums">
           <span>{apt.time}</span>
-          <span className="capitalize opacity-80">
-            {apt.status.replace('_', ' ')}
-          </span>
+          <span className="opacity-80">{apt.status}</span>
         </div>
         <p className="text-xs font-semibold truncate mt-0.5">
           {patient?.name ?? 'Patient'}
@@ -150,7 +165,6 @@ export function SchedulePage() {
     );
   };
 
-  // Month grid dates
   const monthGridDays = useMemo(() => {
     const mStart = startOfMonth(cursorDate);
     const mEnd = endOfMonth(cursorDate);
@@ -167,12 +181,11 @@ export function SchedulePage() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-[#172B27]">Schedule</h1>
           <p className="text-xs sm:text-sm text-[#84938D]">
-            Manage provider availability, room capacity, and upcoming bookings
+            Manage provider availability, working hours, and conflict-free bookings
           </p>
         </div>
 
@@ -233,9 +246,8 @@ export function SchedulePage() {
         </div>
       </div>
 
-      {/* Controls Bar: Doctor Filters + Calendar Controls */}
+      {/* Controls Bar */}
       <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-        {/* Doctor Filter Strip */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 xl:pb-0">
           <button
             type="button"
@@ -261,14 +273,17 @@ export function SchedulePage() {
                     : 'bg-white border-[#E2EAE5] text-[#172B27] hover:bg-[#F3F7F4]'
                 }`}
               >
-                <Avatar name={doc.name} src={doc.avatarUrl} size="xs" />
+                <Avatar
+                  name={doc.name}
+                  src={doc.avatarUrl ?? undefined}
+                  size="xs"
+                />
                 <span>{doc.name}</span>
               </button>
             );
           })}
         </div>
 
-        {/* Date Nav + Day/Week/Month Switcher */}
         <div className="flex flex-wrap items-center justify-between xl:justify-end gap-3">
           <div className="flex items-center gap-1.5">
             <button
@@ -324,7 +339,7 @@ export function SchedulePage() {
           <div className="min-w-[820px] grid grid-cols-6 divide-x divide-[#E2EAE5]">
             {weekDays.map((day) => {
               const dayStr = format(day, 'yyyy-MM-dd');
-              const isToday = dayStr === TODAY_STR;
+              const isToday = dayStr === todayStr;
               const dayApts = filteredAppointments
                 .filter((a) => a.date === dayStr)
                 .sort((a, b) => a.time.localeCompare(b.time));
@@ -445,7 +460,7 @@ export function SchedulePage() {
             {monthGridDays.map((day) => {
               const dayStr = format(day, 'yyyy-MM-dd');
               const inMonth = isSameMonth(day, cursorDate);
-              const isToday = dayStr === TODAY_STR;
+              const isToday = dayStr === todayStr;
               const dayApts = filteredAppointments
                 .filter((a) => a.date === dayStr)
                 .sort((a, b) => a.time.localeCompare(b.time));
@@ -500,7 +515,6 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* Legend */}
       <div className="flex flex-wrap items-center gap-4 text-xs text-[#84938D] pt-1">
         <span className="inline-flex items-center gap-1.5 font-medium text-[#172B27]">
           <CalendarIcon className="w-3.5 h-3.5 text-[#0B6657]" />
@@ -508,9 +522,7 @@ export function SchedulePage() {
         </span>
         {(Object.keys(CATEGORY_STYLES) as AppointmentCategory[]).map((cat) => (
           <span key={cat} className="inline-flex items-center gap-1.5">
-            <span
-              className={`w-2.5 h-2.5 rounded-sm border ${CATEGORY_STYLES[cat]}`}
-            />
+            <span className={`w-2.5 h-2.5 rounded-sm border ${CATEGORY_STYLES[cat]}`} />
             <span>{cat}</span>
           </span>
         ))}

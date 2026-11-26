@@ -6,6 +6,7 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { AppointmentModal } from './components/modals/AppointmentModal';
 import { PatientModal } from './components/modals/PatientModal';
 import { PatientProfileDrawer } from './components/modals/PatientProfileDrawer';
+import { AuthScreen } from './features/auth/AuthScreen';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { InboxPage } from './features/inbox/InboxPage';
 import { PatientsPage } from './features/patients/PatientsPage';
@@ -16,8 +17,25 @@ import { ReportsPage } from './features/reports/ReportsPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 
 function ClinicShell() {
-  const { activeRoute } = useClinic();
+  const { authStatus, activeRoute } = useClinic();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  if (authStatus === 'loading') {
+    return (
+      <div className="min-h-screen bg-[#F3F7F4] flex items-center justify-center text-sm text-[#84938D]">
+        Loading Northfield Family Clinic...
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <>
+        <AuthScreen />
+        <ToastContainer />
+      </>
+    );
+  }
 
   const renderPage = () => {
     switch (activeRoute) {
@@ -57,7 +75,6 @@ function ClinicShell() {
         </main>
       </div>
 
-      {/* Global Modals, Profile Drawer & Toast Notifications */}
       <AppointmentModal />
       <PatientModal />
       <PatientProfileDrawer />

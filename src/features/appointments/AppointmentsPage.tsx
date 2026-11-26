@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { format } from 'date-fns';
 import {
   Search,
   Plus,
@@ -10,7 +11,6 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
-import { TODAY_STR } from '../../data/mockClinicData';
 import { Avatar } from '../../components/ui/Avatar';
 
 type AppointmentTab = 'today' | 'upcoming' | 'completed' | 'closed';
@@ -19,10 +19,11 @@ export function AppointmentsPage() {
   const {
     appointments,
     doctors,
+    authUser,
     getPatientById,
     getDoctorById,
     openAppointmentModal,
-    updateAppointmentStatus,
+    transitionVisitFlow,
     remindAllExpectedToday,
     remindSingleAppointment,
     openConversationForPatient,
@@ -33,18 +34,29 @@ export function AppointmentsPage() {
   const [search, setSearch] = useState('');
   const [doctorId, setDoctorId] = useState('all');
 
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const canCheckIn =
+    authUser?.role === 'ADMIN' || authUser?.role === 'RECEPTIONIST';
+  const canConsult = authUser?.role === 'ADMIN' || authUser?.role === 'DOCTOR';
+
   const filtered = useMemo(() => {
     return appointments
       .filter((apt) => {
         if (doctorId !== 'all' && apt.doctorId !== doctorId) return false;
-        if (tab === 'today' && apt.date !== TODAY_STR) return false;
+        if (tab === 'today' && apt.date !== todayStr) return false;
         if (
           tab === 'upcoming' &&
-          (apt.date <= TODAY_STR || apt.status === 'cancelled' || apt.status === 'no_show')
+          (apt.date <= todayStr ||
+            apt.status === 'CANCELLED' ||
+            apt.status === 'NO_SHOW')
         )
           return false;
-        if (tab === 'completed' && apt.status !== 'seen') return false;
-        if (tab === 'closed' && apt.status !== 'cancelled' && apt.status !== 'no_show')
+        if (tab === 'completed' && apt.status !== 'COMPLETED') return false;
+        if (
+          tab === 'closed' &&
+          apt.status !== 'CANCELLED' &&
+          apt.status !== 'NO_SHOW'
+        )
           return false;
 
         if (search.trim()) {
@@ -62,7 +74,7 @@ export function AppointmentsPage() {
         return true;
       })
       .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
-  }, [appointments, tab, doctorId, search, getPatientById, getDoctorById]);
+  }, [appointments, tab, doctorId, search, todayStr, getPatientById, getDoctorById]);
 
   return (
     <div className="space-y-5">
@@ -70,19 +82,21 @@ export function AppointmentsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[#172B27]">Appointments</h1>
           <p className="text-xs sm:text-sm text-[#84938D]">
-            Centralized visit queue, check-ins, reminders, and status updates
+            Centralized visit queue, check-ins, reminders, and workflow statuses
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={remindAllExpectedToday}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#E2EAE5] bg-white hover:bg-[#EAF4EF] text-[#073C35] text-xs sm:text-sm font-medium transition-colors cursor-pointer"
-          >
-            <BellRing className="w-4 h-4 text-[#0B6657]" />
-            Remind expected
-          </button>
+          {canCheckIn && (
+            <button
+              type="button"
+              onClick={remindAllExpectedToday}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#E2EAE5] bg-white hover:bg-[#EAF4EF] text-[#073C35] text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+            >
+              <BellRing className="w-4 h-4 text-[#0B6657]" />
+              Remind expected
+            </button>
+          )}
           <button
             type="button"
             onClick={() => openAppointmentModal({ mode: 'create' })}
@@ -165,7 +179,7 @@ export function AppointmentsPage() {
                   <th className="py-3 px-4">Patient</th>
                   <th className="py-3 px-4">Assigned doctor</th>
                   <th className="py-3 px-4">Visit type</th>
-                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Status / Flow</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -174,6 +188,7 @@ export function AppointmentsPage() {
                   const patient = getPatientById(apt.patientId);
                   const doctor = getDoctorById(apt.doctorId);
                   if (!patient) return null;
+                  const flowStatus = apt.visit?.flowStatus ?? 'EXPECTED';
 
                   return (
                     <tr
@@ -182,7 +197,7 @@ export function AppointmentsPage() {
                     >
                       <td className="py-3 px-4 whitespace-nowrap tabular-nums">
                         <span className="font-semibold text-[#172B27]">
-                          {apt.date === TODAY_STR ? 'Today' : apt.date}
+                          {apt.date === todayStr ? 'Today' : apt.date}
                         </span>
                         <span className="text-[#84938D]"> · {apt.time}</span>
                       </td>
@@ -218,39 +233,45 @@ export function AppointmentsPage() {
                       </td>
 
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="font-medium capitalize text-[#0B6657]">
-                          {apt.status.replace('_', ' ')}
+                        <span className="font-medium text-[#0B6657]">
+                          {apt.status}
                         </span>
+                        {apt.status !== 'CANCELLED' && apt.status !== 'NO_SHOW' && (
+                          <span className="text-[#84938D]"> · {flowStatus}</span>
+                        )}
                       </td>
 
                       <td className="py-3 px-4 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
-                          {apt.status === 'expected' && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateAppointmentStatus(apt.id, 'waiting')
-                                }
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#073C35] text-white font-medium hover:bg-[#0B6657] cursor-pointer"
-                              >
-                                <UserCheck className="w-3 h-3" />
-                                Check in
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => remindSingleAppointment(apt.id)}
-                                className="px-2 py-1 rounded-lg border border-[#E2EAE5] text-[#0B6657] hover:bg-[#EAF4EF] cursor-pointer"
-                              >
-                                Remind
-                              </button>
-                            </>
-                          )}
-                          {apt.status === 'waiting' && (
+                          {apt.status !== 'CANCELLED' &&
+                            apt.status !== 'NO_SHOW' &&
+                            flowStatus === 'EXPECTED' &&
+                            canCheckIn && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    transitionVisitFlow(apt.id, 'WAITING')
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#073C35] text-white font-medium hover:bg-[#0B6657] cursor-pointer"
+                                >
+                                  <UserCheck className="w-3 h-3" />
+                                  Check in
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => remindSingleAppointment(apt.id)}
+                                  className="px-2 py-1 rounded-lg border border-[#E2EAE5] text-[#0B6657] hover:bg-[#EAF4EF] cursor-pointer"
+                                >
+                                  Remind
+                                </button>
+                              </>
+                            )}
+                          {flowStatus === 'WAITING' && canConsult && (
                             <button
                               type="button"
                               onClick={() =>
-                                updateAppointmentStatus(apt.id, 'in_consultation')
+                                transitionVisitFlow(apt.id, 'IN_CONSULTATION')
                               }
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0B6657] text-white font-medium hover:bg-[#073C35] cursor-pointer"
                             >
@@ -258,10 +279,10 @@ export function AppointmentsPage() {
                               Call
                             </button>
                           )}
-                          {apt.status === 'in_consultation' && (
+                          {flowStatus === 'IN_CONSULTATION' && canConsult && (
                             <button
                               type="button"
-                              onClick={() => updateAppointmentStatus(apt.id, 'seen')}
+                              onClick={() => transitionVisitFlow(apt.id, 'SEEN')}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#20B875] text-white font-medium hover:bg-[#199e63] cursor-pointer"
                             >
                               <CheckCircle2 className="w-3 h-3" />
@@ -270,10 +291,8 @@ export function AppointmentsPage() {
                           )}
                           <button
                             type="button"
-                            onClick={() =>
-                              openConversationForPatient(patient.id)
-                            }
-                            aria-label="WhatsApp message"
+                            onClick={() => openConversationForPatient(patient.id)}
+                            aria-label="Open internal thread"
                             className="p-1.5 rounded-lg border border-[#E2EAE5] text-[#0B6657] hover:bg-[#EAF4EF] cursor-pointer"
                           >
                             <MessageSquare className="w-3.5 h-3.5" />

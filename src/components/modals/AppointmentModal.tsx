@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { format } from 'date-fns';
 import { Modal } from '../ui/Modal';
 import { useClinic } from '../../context/ClinicContext';
-import { TODAY_STR } from '../../data/mockClinicData';
 import { AppointmentCategory, AppointmentStatus } from '../../types/clinic';
 
 const appointmentSchema = z.object({
@@ -12,7 +12,7 @@ const appointmentSchema = z.object({
   doctorId: z.string().min(1, 'Please select a doctor'),
   date: z.string().min(1, 'Date is required'),
   time: z.string().min(1, 'Time is required'),
-  durationMinutes: z.coerce.number().min(10).max(120),
+  durationMinutes: z.coerce.number().min(10).max(180),
   category: z.enum([
     'General Consultation',
     'Annual Check-up',
@@ -21,14 +21,7 @@ const appointmentSchema = z.object({
     'Vaccination',
     'Urgent Visit',
   ]),
-  status: z.enum([
-    'expected',
-    'waiting',
-    'in_consultation',
-    'seen',
-    'cancelled',
-    'no_show',
-  ]),
+  status: z.enum(['SCHEDULED', 'CONFIRMED', 'CANCELLED', 'COMPLETED', 'NO_SHOW']),
   notes: z.string().optional(),
 });
 
@@ -44,6 +37,7 @@ const CATEGORIES: AppointmentCategory[] = [
 ];
 
 const TIME_SLOTS = [
+  '08:00',
   '08:30',
   '09:00',
   '09:30',
@@ -73,8 +67,13 @@ export function AppointmentModal() {
     cancelAppointment,
   } = useClinic();
 
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
   const activePatients = patients.filter((p) => p.status !== 'Archived');
-  const isEdit = appointmentModal?.mode === 'edit' && Boolean(appointmentModal.appointment);
+  const isEdit =
+    appointmentModal?.mode === 'edit' && Boolean(appointmentModal.appointment);
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
 
   const {
     register,
@@ -86,17 +85,18 @@ export function AppointmentModal() {
     defaultValues: {
       patientId: activePatients[0]?.id ?? '',
       doctorId: doctors[0]?.id ?? '',
-      date: TODAY_STR,
+      date: todayStr,
       time: '11:00',
       durationMinutes: 30,
       category: 'General Consultation',
-      status: 'expected',
+      status: 'SCHEDULED',
       notes: '',
     },
   });
 
   useEffect(() => {
     if (!appointmentModal) return;
+    setServerError(null);
     if (appointmentModal.mode === 'edit' && appointmentModal.appointment) {
       const a = appointmentModal.appointment;
       reset({
@@ -105,7 +105,9 @@ export function AppointmentModal() {
         date: a.date,
         time: a.time,
         durationMinutes: a.durationMinutes,
-        category: a.category,
+        category: (CATEGORIES.includes(a.category as AppointmentCategory)
+          ? a.category
+          : 'General Consultation') as AppointmentCategory,
         status: a.status,
         notes: a.notes ?? '',
       });
@@ -113,28 +115,38 @@ export function AppointmentModal() {
       reset({
         patientId: appointmentModal.defaultPatientId ?? activePatients[0]?.id ?? '',
         doctorId: appointmentModal.defaultDoctorId ?? doctors[0]?.id ?? '',
-        date: appointmentModal.defaultDate ?? TODAY_STR,
+        date: appointmentModal.defaultDate ?? todayStr,
         time: appointmentModal.defaultTime ?? '11:00',
         durationMinutes: 30,
         category: 'General Consultation',
-        status: 'expected',
+        status: 'SCHEDULED',
         notes: '',
       });
     }
   }, [appointmentModal, reset]);
 
-  const onSubmit = (values: AppointmentFormValues) => {
-    saveAppointment({
-      id: appointmentModal?.appointment?.id,
-      patientId: values.patientId,
-      doctorId: values.doctorId,
-      date: values.date,
-      time: values.time,
-      durationMinutes: values.durationMinutes,
-      category: values.category,
-      status: values.status as AppointmentStatus,
-      notes: values.notes,
-    });
+  const onSubmit = async (values: AppointmentFormValues) => {
+    setServerError(null);
+    setSubmitting(true);
+    try {
+      await saveAppointment({
+        id: appointmentModal?.appointment?.id,
+        patientId: values.patientId,
+        doctorId: values.doctorId,
+        date: values.date,
+        time: values.time,
+        durationMinutes: values.durationMinutes,
+        category: values.category,
+        status: values.status as AppointmentStatus,
+        notes: values.notes,
+      });
+    } catch (err) {
+      setServerError(
+        err instanceof Error ? err.message : 'Unable to save appointment'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -142,9 +154,18 @@ export function AppointmentModal() {
       open={Boolean(appointmentModal)}
       onClose={closeAppointmentModal}
       title={isEdit ? 'Edit or reschedule appointment' : 'Schedule new appointment'}
-      subtitle="Northfield Family Clinic · Instant calendar & patient flow sync"
+      subtitle="Northfield Family Clinic · Server-validated availability & conflict checks"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {serverError && (
+          <div
+            role="alert"
+            className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-700 font-medium"
+          >
+            {serverError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
@@ -255,12 +276,11 @@ export function AppointmentModal() {
               {...register('status')}
               className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             >
-              <option value="expected">Expected</option>
-              <option value="waiting">Waiting room</option>
-              <option value="in_consultation">In consultation</option>
-              <option value="seen">Seen</option>
-              <option value="no_show">No-show</option>
-              <option value="cancelled">Cancelled</option>
+              <option value="SCHEDULED">Scheduled</option>
+              <option value="CONFIRMED">Confirmed</option>
+              <option value="COMPLETED">Completed</option>
+              <option value="NO_SHOW">No-show</option>
+              <option value="CANCELLED">Cancelled</option>
             </select>
           </div>
         </div>
@@ -281,8 +301,8 @@ export function AppointmentModal() {
           {isEdit && appointmentModal?.appointment ? (
             <button
               type="button"
-              onClick={() => {
-                cancelAppointment(appointmentModal.appointment!.id);
+              onClick={async () => {
+                await cancelAppointment(appointmentModal.appointment!.id);
                 closeAppointmentModal();
               }}
               className="px-3 py-2 rounded-xl text-xs font-medium text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
@@ -303,9 +323,14 @@ export function AppointmentModal() {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium transition-colors cursor-pointer"
+              disabled={submitting}
+              className="px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] disabled:opacity-60 text-white text-xs font-medium transition-colors cursor-pointer"
             >
-              {isEdit ? 'Save changes' : 'Confirm booking'}
+              {submitting
+                ? 'Saving...'
+                : isEdit
+                ? 'Save changes'
+                : 'Confirm booking'}
             </button>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { format } from 'date-fns';
 import {
   Send,
   Plus,
@@ -9,6 +10,7 @@ import {
   MessageSquare,
   CalendarCheck2,
   Users,
+  XCircle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -22,36 +24,45 @@ import {
 import { useClinic } from '../../context/ClinicContext';
 import { Campaign, CampaignStatus } from '../../types/clinic';
 import { Modal } from '../../components/ui/Modal';
-import { TODAY_STR } from '../../data/mockClinicData';
 
 export function CampaignsPage() {
-  const { campaigns, saveCampaign, sendCampaignNow, scheduleCampaign } = useClinic();
+  const {
+    campaigns,
+    authUser,
+    saveCampaign,
+    executeCampaignNow,
+    scheduleCampaign,
+    cancelCampaign,
+  } = useClinic();
+
+  const isAdmin = authUser?.role === 'ADMIN';
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
 
   const [editModal, setEditModal] = useState<{
     open: boolean;
     campaign?: Campaign;
   }>({ open: false });
   const [previewCampaign, setPreviewCampaign] = useState<Campaign | null>(null);
-  const [confirmSendCampaign, setConfirmSendCampaign] = useState<Campaign | null>(null);
+  const [confirmExecuteCampaign, setConfirmExecuteCampaign] =
+    useState<Campaign | null>(null);
   const [scheduleTarget, setScheduleTarget] = useState<Campaign | null>(null);
-  const [scheduleDateDraft, setScheduleDateDraft] = useState(TODAY_STR);
+  const [scheduleDateDraft, setScheduleDateDraft] = useState(todayStr);
 
-  // Campaign form state
   const [formName, setFormName] = useState('');
   const [formAudience, setFormAudience] = useState('');
   const [formRecipients, setFormRecipients] = useState(120);
-  const [formDate, setFormDate] = useState(TODAY_STR);
-  const [formStatus, setFormStatus] = useState<CampaignStatus>('Draft');
+  const [formDate, setFormDate] = useState(todayStr);
+  const [formStatus, setFormStatus] = useState<CampaignStatus>('DRAFT');
   const [formTemplate, setFormTemplate] = useState('');
 
   const openCreateModal = () => {
     setFormName('');
     setFormAudience('Patients overdue for annual check-up');
     setFormRecipients(150);
-    setFormDate(TODAY_STR);
-    setFormStatus('Draft');
+    setFormDate(todayStr);
+    setFormStatus('DRAFT');
     setFormTemplate(
-      'Hello {{first_name}}, Northfield Family Clinic has morning appointments available next week. Reply BOOK to reserve your preferred time.'
+      'Hello {{first_name}}, Northfield Family Clinic has morning appointments available next week.'
     );
     setEditModal({ open: true });
   };
@@ -66,10 +77,10 @@ export function CampaignsPage() {
     setEditModal({ open: true, campaign: camp });
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) return;
-    saveCampaign({
+    await saveCampaign({
       id: editModal.campaign?.id,
       name: formName.trim(),
       audience: formAudience.trim(),
@@ -81,7 +92,6 @@ export function CampaignsPage() {
     setEditModal({ open: false });
   };
 
-  // Analytics calculations
   const totals = useMemo(() => {
     const sent = campaigns.reduce((s, c) => s + c.sentCount, 0);
     const read = campaigns.reduce((s, c) => s + c.readCount, 0);
@@ -108,36 +118,39 @@ export function CampaignsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-[#172B27]">Campaigns</h1>
           <p className="text-xs sm:text-sm text-[#84938D]">
-            WhatsApp patient outreach, seasonal check-up drives, and clinic announcements
+            Database-managed patient outreach templates, audiences, and campaign statistics
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={openCreateModal}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs sm:text-sm font-medium transition-colors self-start sm:self-auto cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Create campaign
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs sm:text-sm font-medium transition-colors self-start sm:self-auto cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Create campaign
+          </button>
+        )}
       </div>
 
       {/* Campaign Analytics KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#84938D]">Messages sent</span>
+            <span className="text-xs font-medium text-[#84938D]">
+              Recorded recipients
+            </span>
             <Send className="w-4 h-4 text-[#0B6657]" />
           </div>
           <p className="text-2xl font-semibold text-[#172B27] mt-2 tabular-nums">
             {totals.sent.toLocaleString()}
           </p>
-          <p className="text-xs text-[#84938D] mt-1">Delivered via WhatsApp</p>
+          <p className="text-xs text-[#84938D] mt-1">Stored in clinic database</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4">
@@ -148,7 +161,7 @@ export function CampaignsPage() {
           <p className="text-2xl font-semibold text-[#172B27] mt-2 tabular-nums">
             {totals.readRate}%
           </p>
-          <p className="text-xs text-[#0B6657] mt-1">Opened within 2 hours</p>
+          <p className="text-xs text-[#0B6657] mt-1">Engagement ratio</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4">
@@ -159,7 +172,7 @@ export function CampaignsPage() {
           <p className="text-2xl font-semibold text-[#172B27] mt-2 tabular-nums">
             {totals.replyRate}%
           </p>
-          <p className="text-xs text-[#84938D] mt-1">Direct patient responses</p>
+          <p className="text-xs text-[#84938D] mt-1">Patient responses</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-[#E2EAE5] p-4">
@@ -172,21 +185,19 @@ export function CampaignsPage() {
           <p className="text-2xl font-semibold text-[#0B6657] mt-2 tabular-nums">
             {totals.bookings}
           </p>
-          <p className="text-xs text-[#84938D] mt-1">Confirmed appointments</p>
+          <p className="text-xs text-[#84938D] mt-1">Tracked conversions</p>
         </div>
       </div>
 
       {/* Campaign Delivery Chart */}
       <div className="bg-white rounded-2xl border border-[#E2EAE5] p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[#172B27]">
-              Campaign delivery & booking conversion
-            </h2>
-            <p className="text-xs text-[#84938D]">
-              Sent vs read messages and confirmed clinic bookings
-            </p>
-          </div>
+        <div className="mb-4">
+          <h2 className="text-sm font-semibold text-[#172B27]">
+            Campaign reach & booking conversion
+          </h2>
+          <p className="text-xs text-[#84938D]">
+            Database campaign records across scheduled and completed runs
+          </p>
         </div>
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -241,18 +252,16 @@ export function CampaignsPage() {
                     <h3 className="text-base font-semibold text-[#172B27]">
                       {camp.name}
                     </h3>
-                    <p className="text-xs text-[#84938D] mt-0.5">
-                      {camp.audience}
-                    </p>
+                    <p className="text-xs text-[#84938D] mt-0.5">{camp.audience}</p>
                   </div>
                   <span
                     className={`text-xs font-semibold shrink-0 ${
-                      camp.status === 'Active'
-                        ? 'text-[#20B875]'
-                        : camp.status === 'Completed'
+                      camp.status === 'COMPLETED'
                         ? 'text-[#0B6657]'
-                        : camp.status === 'Scheduled'
-                        ? 'text-amber-700'
+                        : camp.status === 'SCHEDULED'
+                        ? 'text-[#20B875]'
+                        : camp.status === 'CANCELLED'
+                        ? 'text-red-700'
                         : 'text-[#84938D]'
                     }`}
                   >
@@ -275,10 +284,9 @@ export function CampaignsPage() {
                   {camp.messageTemplate}
                 </p>
 
-                {/* Delivery Stats */}
                 <div className="mt-4 grid grid-cols-4 gap-2 pt-3 border-t border-[#E2EAE5] text-xs">
                   <div>
-                    <p className="text-[#84938D] text-[11px]">Sent</p>
+                    <p className="text-[#84938D] text-[11px]">Recorded</p>
                     <p className="font-semibold text-[#172B27] tabular-nums mt-0.5">
                       {camp.sentCount}
                     </p>
@@ -304,7 +312,6 @@ export function CampaignsPage() {
                 </div>
               </div>
 
-              {/* Card Actions */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#E2EAE5]">
                 <div className="flex items-center gap-1.5">
                   <button
@@ -315,37 +322,52 @@ export function CampaignsPage() {
                     <Eye className="w-3.5 h-3.5" />
                     Preview
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => openEditModal(camp)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#F3F7F4] text-xs font-medium text-[#172B27] cursor-pointer"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    Edit
-                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(camp)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#F3F7F4] text-xs font-medium text-[#172B27] cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Edit
+                    </button>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setScheduleTarget(camp);
-                      setScheduleDateDraft(camp.scheduledDate);
-                    }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#EAF4EF] text-xs font-medium text-[#0B6657] cursor-pointer"
-                  >
-                    <CalendarClock className="w-3.5 h-3.5" />
-                    Schedule
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmSendCampaign(camp)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    Send
-                  </button>
-                </div>
+                {isAdmin && camp.status !== 'CANCELLED' && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setScheduleTarget(camp);
+                        setScheduleDateDraft(camp.scheduledDate);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2EAE5] hover:bg-[#EAF4EF] text-xs font-medium text-[#0B6657] cursor-pointer"
+                    >
+                      <CalendarClock className="w-3.5 h-3.5" />
+                      Schedule
+                    </button>
+                    {camp.status !== 'COMPLETED' && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmExecuteCampaign(camp)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        Run
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => cancelCampaign(camp.id)}
+                      title="Cancel campaign"
+                      aria-label={`Cancel ${camp.name}`}
+                      className="p-1.5 rounded-lg border border-[#E2EAE5] hover:bg-red-50 text-[#84938D] hover:text-red-600 cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </article>
           );
@@ -356,8 +378,8 @@ export function CampaignsPage() {
       <Modal
         open={editModal.open}
         onClose={() => setEditModal({ open: false })}
-        title={editModal.campaign ? 'Edit campaign' : 'Create WhatsApp campaign'}
-        subtitle="Northfield Family Clinic · Patient outreach"
+        title={editModal.campaign ? 'Edit campaign' : 'Create clinic campaign'}
+        subtitle="Stored and managed in the clinic database"
       >
         <form onSubmit={handleSaveForm} className="space-y-4">
           <div>
@@ -369,7 +391,7 @@ export function CampaignsPage() {
               required
               value={formName}
               onChange={(e) => setFormName(e.target.value)}
-              placeholder="e.g. Flu shot clinic reminder"
+              placeholder="e.g. Seasonal wellness outreach"
               className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             />
           </div>
@@ -424,17 +446,17 @@ export function CampaignsPage() {
                 onChange={(e) => setFormStatus(e.target.value as CampaignStatus)}
                 className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
               >
-                <option value="Draft">Draft</option>
-                <option value="Scheduled">Scheduled</option>
-                <option value="Active">Active</option>
-                <option value="Completed">Completed</option>
+                <option value="DRAFT">DRAFT</option>
+                <option value="SCHEDULED">SCHEDULED</option>
+                <option value="COMPLETED">COMPLETED</option>
+                <option value="CANCELLED">CANCELLED</option>
               </select>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-              WhatsApp message template
+              Message template
             </label>
             <textarea
               rows={4}
@@ -463,11 +485,11 @@ export function CampaignsPage() {
         </form>
       </Modal>
 
-      {/* Preview Message Modal */}
+      {/* Preview Modal */}
       <Modal
         open={Boolean(previewCampaign)}
         onClose={() => setPreviewCampaign(null)}
-        title="WhatsApp message preview"
+        title="Campaign template preview"
         subtitle={previewCampaign?.name}
         maxWidthClass="max-w-md"
       >
@@ -478,7 +500,7 @@ export function CampaignsPage() {
                 <span className="font-semibold text-[#073C35]">
                   Northfield Family Clinic
                 </span>
-                <span>WhatsApp Business</span>
+                <span>{previewCampaign.status}</span>
               </div>
               <div className="bg-[#EAF4EF] border border-[#CBE2D6] rounded-2xl rounded-tl-sm p-3.5 text-sm text-[#172B27] leading-relaxed">
                 {previewCampaign.messageTemplate
@@ -515,7 +537,7 @@ export function CampaignsPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-              Dispatch date
+              Scheduled date
             </label>
             <input
               type="date"
@@ -534,9 +556,9 @@ export function CampaignsPage() {
             </button>
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 if (scheduleTarget) {
-                  scheduleCampaign(scheduleTarget.id, scheduleDateDraft);
+                  await scheduleCampaign(scheduleTarget.id, scheduleDateDraft);
                 }
                 setScheduleTarget(null);
               }}
@@ -548,46 +570,46 @@ export function CampaignsPage() {
         </div>
       </Modal>
 
-      {/* Send Campaign Confirmation Modal */}
+      {/* Complete/Record Campaign Confirmation Modal */}
       <Modal
-        open={Boolean(confirmSendCampaign)}
-        onClose={() => setConfirmSendCampaign(null)}
-        title="Confirm campaign send"
-        subtitle={confirmSendCampaign?.name}
+        open={Boolean(confirmExecuteCampaign)}
+        onClose={() => setConfirmExecuteCampaign(null)}
+        title="Confirm campaign completion"
+        subtitle={confirmExecuteCampaign?.name}
         maxWidthClass="max-w-md"
       >
-        {confirmSendCampaign && (
+        {confirmExecuteCampaign && (
           <div className="space-y-4">
             <p className="text-sm text-[#172B27] leading-relaxed">
-              You are about to send{' '}
-              <span className="font-semibold">{confirmSendCampaign.name}</span>{' '}
-              via WhatsApp Business to{' '}
+              Mark{' '}
+              <span className="font-semibold">{confirmExecuteCampaign.name}</span>{' '}
+              as completed in the clinic database for{' '}
               <span className="font-semibold tabular-nums">
-                {confirmSendCampaign.recipientCount}
+                {confirmExecuteCampaign.recipientCount}
               </span>{' '}
-              patients ({confirmSendCampaign.audience}).
+              target recipients ({confirmExecuteCampaign.audience})?
             </p>
             <div className="rounded-xl bg-[#F3F7F4] border border-[#E2EAE5] p-3 text-xs text-[#84938D]">
-              Messages will be dispatched immediately following clinic opt-in preferences.
+              Campaign records and recipient logs are persisted in the database with no external messaging dispatch.
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setConfirmSendCampaign(null)}
+                onClick={() => setConfirmExecuteCampaign(null)}
                 className="px-4 py-2 rounded-xl border border-[#E2EAE5] text-xs font-medium text-[#172B27] hover:bg-[#F3F7F4] cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  sendCampaignNow(confirmSendCampaign.id);
-                  setConfirmSendCampaign(null);
+                onClick={async () => {
+                  await executeCampaignNow(confirmExecuteCampaign.id);
+                  setConfirmExecuteCampaign(null);
                 }}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
-                Send campaign now
+                Record completion
               </button>
             </div>
           </div>

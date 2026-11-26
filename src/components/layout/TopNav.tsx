@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { Bell, Clock, Menu, Plus, CheckCheck } from 'lucide-react';
+import { Bell, Clock, Menu, Plus, LogOut } from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
 import { Avatar } from '../ui/Avatar';
 import { NADIA_AVATAR } from './Sidebar';
@@ -12,10 +12,10 @@ interface TopNavProps {
 export function TopNav({ onOpenMobileNav }: TopNavProps) {
   const {
     settings,
-    notifications,
-    unreadNotificationsCount,
-    markNotificationRead,
-    markAllNotificationsRead,
+    authUser,
+    logout,
+    totalUnreadMessages,
+    analytics,
     setActiveRoute,
     openAppointmentModal,
   } = useClinic();
@@ -39,6 +39,10 @@ export function TopNav({ onOpenMobileNav }: TopNavProps) {
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
   }, [notifOpen]);
+
+  const alertCount =
+    (totalUnreadMessages > 0 ? 1 : 0) +
+    ((analytics?.waitingCount ?? 0) > 0 ? 1 : 0);
 
   return (
     <header className="h-16 shrink-0 bg-white border-b border-[#E2EAE5] px-4 sm:px-6 flex items-center justify-between gap-4 z-20">
@@ -70,91 +74,93 @@ export function TopNav({ onOpenMobileNav }: TopNavProps) {
         </div>
       </div>
 
-      {/* Right: Notification Bell, User Avatar, Primary New Action */}
+      {/* Right: Alerts Popover, User Profile, Sign Out, New Action */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-        {/* Notifications Popover */}
         <div className="relative" ref={notifRef}>
           <button
             type="button"
             onClick={() => setNotifOpen((prev) => !prev)}
-            aria-label="Notifications"
+            aria-label="Clinic alerts"
             className="relative w-10 h-10 rounded-xl border border-[#E2EAE5] bg-white hover:bg-[#F3F7F4] flex items-center justify-center text-[#172B27] transition-colors cursor-pointer"
           >
             <Bell className="w-4 h-4" />
-            {unreadNotificationsCount > 0 && (
+            {alertCount > 0 && (
               <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#20B875] ring-2 ring-white" />
             )}
           </button>
 
           {notifOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-[#E2EAE5] shadow-xl overflow-hidden z-50">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-[#E2EAE5]">
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-[#E2EAE5] shadow-xl overflow-hidden z-50">
+              <div className="px-4 py-3 border-b border-[#E2EAE5]">
                 <span className="text-sm font-semibold text-[#172B27]">
-                  Clinic notifications
+                  Live clinic summary
                 </span>
-                {unreadNotificationsCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={markAllNotificationsRead}
-                    className="inline-flex items-center gap-1 text-xs font-medium text-[#0B6657] hover:text-[#073C35] cursor-pointer"
-                  >
-                    <CheckCheck className="w-3.5 h-3.5" />
-                    Mark all read
-                  </button>
-                )}
               </div>
-              <div className="max-h-80 overflow-y-auto divide-y divide-[#E2EAE5]">
-                {notifications.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => {
-                      markNotificationRead(n.id);
-                      if (n.route) setActiveRoute(n.route);
-                      setNotifOpen(false);
-                    }}
-                    className={`w-full text-left px-4 py-3 hover:bg-[#F3F7F4] transition-colors flex items-start gap-3 cursor-pointer ${
-                      n.read ? 'opacity-70' : 'bg-[#EAF4EF]/35'
-                    }`}
-                  >
-                    <span
-                      className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
-                        n.read ? 'bg-[#E2EAE5]' : 'bg-[#20B875]'
-                      }`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-[#172B27] leading-snug">
-                        {n.title}
-                      </p>
-                      <p className="text-xs text-[#84938D] mt-0.5 line-clamp-2">
-                        {n.detail}
-                      </p>
-                      <p className="text-[11px] text-[#84938D] mt-1 tabular-nums">
-                        {n.time}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+              <div className="divide-y divide-[#E2EAE5]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveRoute('dashboard');
+                    setNotifOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-3 hover:bg-[#F3F7F4] transition-colors cursor-pointer"
+                >
+                  <p className="text-xs font-semibold text-[#172B27]">
+                    {analytics?.waitingCount ?? 0} patients in waiting room
+                  </p>
+                  <p className="text-xs text-[#84938D] mt-0.5">
+                    {analytics?.inConsultationCount ?? 0} active consultations · View patient flow
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveRoute('inbox');
+                    setNotifOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-3 hover:bg-[#F3F7F4] transition-colors cursor-pointer"
+                >
+                  <p className="text-xs font-semibold text-[#172B27]">
+                    {totalUnreadMessages} unread internal messages
+                  </p>
+                  <p className="text-xs text-[#84938D] mt-0.5">
+                    Open internal clinic messaging inbox
+                  </p>
+                </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* User Avatar */}
         <button
           type="button"
           onClick={() => setActiveRoute('settings')}
-          title="Nadia · Clinic Coordinator"
+          title={`${authUser?.name ?? 'User'} · ${authUser?.role ?? 'STAFF'}`}
           className="hidden sm:flex items-center gap-2.5 pl-1 pr-2.5 py-1 rounded-xl hover:bg-[#F3F7F4] transition-colors cursor-pointer"
         >
-          <Avatar name="Nadia" src={NADIA_AVATAR} size="sm" />
+          <Avatar
+            name={authUser?.name ?? 'Staff'}
+            src={authUser?.name?.toLowerCase().includes('nadia') ? NADIA_AVATAR : undefined}
+            size="sm"
+          />
           <div className="hidden md:block text-left leading-tight">
-            <p className="text-xs font-semibold text-[#172B27]">Nadia</p>
-            <p className="text-[11px] text-[#84938D]">Coordinator</p>
+            <p className="text-xs font-semibold text-[#172B27]">
+              {authUser?.name ?? 'Staff'}
+            </p>
+            <p className="text-[11px] text-[#84938D]">{authUser?.role ?? 'STAFF'}</p>
           </div>
         </button>
 
-        {/* Primary New Action Button */}
+        <button
+          type="button"
+          onClick={logout}
+          title="Sign out"
+          aria-label="Sign out"
+          className="hidden sm:flex w-9 h-9 rounded-xl border border-[#E2EAE5] hover:bg-[#F3F7F4] items-center justify-center text-[#84938D] hover:text-[#172B27] transition-colors cursor-pointer"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
+
         <button
           type="button"
           onClick={() => openAppointmentModal({ mode: 'create' })}

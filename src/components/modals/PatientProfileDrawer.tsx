@@ -7,7 +7,6 @@ import {
   MessageSquare,
   Edit3,
   Archive,
-  Trash2,
   Plus,
   Save,
 } from 'lucide-react';
@@ -21,28 +20,31 @@ export function PatientProfileDrawer() {
     getPatientById,
     getDoctorById,
     appointments,
+    authUser,
     openPatientModal,
     openAppointmentModal,
     openConversationForPatient,
     updatePatientNotes,
     archivePatient,
-    deletePatient,
   } = useClinic();
 
   const patient = profilePatientId ? getPatientById(profilePatientId) : undefined;
   const [notesDraft, setNotesDraft] = useState('');
-  const [confirmAction, setConfirmAction] = useState<'archive' | 'delete' | null>(null);
+  const [confirmArchive, setConfirmArchive] = useState(false);
 
   useEffect(() => {
     if (patient) {
       setNotesDraft(patient.notes);
-      setConfirmAction(null);
+      setConfirmArchive(false);
     }
   }, [patient]);
 
   if (!patient) return null;
 
   const doctor = getDoctorById(patient.assignedDoctorId);
+  const canManageAdminOrReception =
+    authUser?.role === 'ADMIN' || authUser?.role === 'RECEPTIONIST';
+
   const patientAppointments = appointments
     .filter((a) => a.patientId === patient.id)
     .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
@@ -83,17 +85,16 @@ export function PatientProfileDrawer() {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Quick Actions */}
           <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
-              onClick={() => {
+              onClick={() =>
                 openAppointmentModal({
                   mode: 'create',
                   defaultPatientId: patient.id,
                   defaultDoctorId: patient.assignedDoctorId,
-                });
-              }}
+                })
+              }
               className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium transition-colors cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -101,26 +102,27 @@ export function PatientProfileDrawer() {
             </button>
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 setProfilePatientId(null);
-                openConversationForPatient(patient.id);
+                await openConversationForPatient(patient.id);
               }}
               className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-[#E2EAE5] hover:bg-[#EAF4EF] text-[#073C35] text-xs font-medium transition-colors cursor-pointer"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              WhatsApp
+              Message
             </button>
-            <button
-              type="button"
-              onClick={() => openPatientModal({ mode: 'edit', patient })}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-[#E2EAE5] hover:bg-[#F3F7F4] text-[#172B27] text-xs font-medium transition-colors cursor-pointer"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-              Edit
-            </button>
+            {canManageAdminOrReception && (
+              <button
+                type="button"
+                onClick={() => openPatientModal({ mode: 'edit', patient })}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-[#E2EAE5] hover:bg-[#F3F7F4] text-[#172B27] text-xs font-medium transition-colors cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Edit
+              </button>
+            )}
           </div>
 
-          {/* Contact & Insurance Details */}
           <div className="space-y-2.5 text-sm border-t border-[#E2EAE5] pt-5">
             <h3 className="text-xs font-semibold text-[#84938D]">Contact & coverage</h3>
             <div className="flex items-center gap-2.5 text-xs text-[#172B27]">
@@ -152,7 +154,7 @@ export function PatientProfileDrawer() {
             )}
           </div>
 
-          {/* Editable Notes */}
+          {/* Editable Clinical Notes */}
           <div className="space-y-2 border-t border-[#E2EAE5] pt-5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold text-[#84938D]">Patient notes</h3>
@@ -173,10 +175,10 @@ export function PatientProfileDrawer() {
             />
           </div>
 
-          {/* Appointment History */}
+          {/* Visit & Consultation History */}
           <div className="space-y-3 border-t border-[#E2EAE5] pt-5">
             <h3 className="text-xs font-semibold text-[#84938D]">
-              Appointment history ({patientAppointments.length})
+              Visit & consultation history ({patientAppointments.length})
             </h3>
             {patientAppointments.length === 0 ? (
               <p className="text-xs text-[#84938D] py-4 text-center border border-dashed border-[#E2EAE5] rounded-xl">
@@ -189,28 +191,36 @@ export function PatientProfileDrawer() {
                   return (
                     <div
                       key={apt.id}
-                      className="p-3 flex items-center justify-between gap-3 bg-white hover:bg-[#F3F7F4]/60 transition-colors"
+                      className="p-3 bg-white hover:bg-[#F3F7F4]/60 transition-colors space-y-1"
                     >
-                      <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 text-xs font-medium text-[#172B27]">
                           <Calendar className="w-3.5 h-3.5 text-[#0B6657] shrink-0" />
                           <span className="tabular-nums">
                             {apt.date} · {apt.time}
                           </span>
                         </div>
-                        <p className="text-xs text-[#84938D] mt-0.5 truncate">
-                          {apt.category} · {doc?.name ?? 'Doctor'}
-                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openAppointmentModal({ mode: 'edit', appointment: apt })
+                          }
+                          className="text-xs font-medium text-[#0B6657] hover:underline shrink-0 cursor-pointer"
+                        >
+                          {apt.visit?.flowStatus ?? apt.status}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openAppointmentModal({ mode: 'edit', appointment: apt })
-                        }
-                        className="text-xs font-medium text-[#0B6657] hover:underline shrink-0 cursor-pointer"
-                      >
-                        {apt.status.replace('_', ' ')}
-                      </button>
+                      <p className="text-xs text-[#84938D]">
+                        {apt.category} · {doc?.name ?? 'Doctor'}
+                        {apt.visit?.waitingMinutes != null
+                          ? ` · Wait ${apt.visit.waitingMinutes}m`
+                          : ''}
+                      </p>
+                      {apt.consultation?.diagnosis && (
+                        <p className="text-[11px] text-[#172B27] bg-[#EAF4EF]/60 rounded-lg px-2 py-1 mt-1">
+                          Dx: {apt.consultation.diagnosis}
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -219,57 +229,46 @@ export function PatientProfileDrawer() {
           </div>
         </div>
 
-        {/* Footer Archive / Delete with Confirmation */}
-        <div className="px-6 py-4 border-t border-[#E2EAE5] bg-[#F3F7F4]/60">
-          {confirmAction ? (
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-[#172B27]">
-                {confirmAction === 'delete'
-                  ? 'Permanently delete patient?'
-                  : 'Archive this patient record?'}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirmAction(null)}
-                  className="px-3 py-1.5 rounded-lg border border-[#E2EAE5] bg-white text-xs font-medium text-[#172B27] cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirmAction === 'delete') deletePatient(patient.id);
-                    else archivePatient(patient.id);
-                    setConfirmAction(null);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium cursor-pointer"
-                >
-                  Confirm
-                </button>
+        {/* Footer Archive (Soft archive only) */}
+        {canManageAdminOrReception && patient.status !== 'Archived' && (
+          <div className="px-6 py-4 border-t border-[#E2EAE5] bg-[#F3F7F4]/60">
+            {confirmArchive ? (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-[#172B27]">
+                  Archive this patient record?
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmArchive(false)}
+                    className="px-3 py-1.5 rounded-lg border border-[#E2EAE5] bg-white text-xs font-medium text-[#172B27] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await archivePatient(patient.id);
+                      setConfirmArchive(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
+                  >
+                    Confirm archive
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between">
+            ) : (
               <button
                 type="button"
-                onClick={() => setConfirmAction('archive')}
+                onClick={() => setConfirmArchive(true)}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-[#84938D] hover:text-[#172B27] cursor-pointer"
               >
                 <Archive className="w-3.5 h-3.5" />
-                Archive patient
+                Archive patient record
               </button>
-              <button
-                type="button"
-                onClick={() => setConfirmAction('delete')}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 hover:text-red-700 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Delete record
-              </button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

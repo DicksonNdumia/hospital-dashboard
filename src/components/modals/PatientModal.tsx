@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { format } from 'date-fns';
 import { Modal } from '../ui/Modal';
 import { useClinic } from '../../context/ClinicContext';
-import { TODAY_STR } from '../../data/mockClinicData';
 import { PatientStatus } from '../../types/clinic';
 
 const patientSchema = z.object({
@@ -24,7 +24,11 @@ type PatientFormValues = z.infer<typeof patientSchema>;
 
 export function PatientModal() {
   const { patientModal, closePatientModal, doctors, savePatient } = useClinic();
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
   const isEdit = patientModal?.mode === 'edit' && Boolean(patientModal.patient);
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
 
   const {
     register,
@@ -49,6 +53,7 @@ export function PatientModal() {
 
   useEffect(() => {
     if (!patientModal) return;
+    setServerError(null);
     if (patientModal.mode === 'edit' && patientModal.patient) {
       const p = patientModal.patient;
       reset({
@@ -79,26 +84,36 @@ export function PatientModal() {
     }
   }, [patientModal, doctors, reset]);
 
-  const onSubmit = (values: PatientFormValues) => {
-    const tags = (values.tagsText ?? '')
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
+  const onSubmit = async (values: PatientFormValues) => {
+    setServerError(null);
+    setSubmitting(true);
+    try {
+      const tags = (values.tagsText ?? '')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
 
-    savePatient({
-      id: patientModal?.patient?.id,
-      name: values.name.trim(),
-      phone: values.phone.trim(),
-      email: values.email.trim(),
-      dateOfBirth: values.dateOfBirth,
-      insuranceProvider: values.insuranceProvider.trim(),
-      memberId: values.memberId.trim(),
-      assignedDoctorId: values.assignedDoctorId,
-      status: values.status as PatientStatus,
-      lastAppointment: patientModal?.patient?.lastAppointment ?? TODAY_STR,
-      tags,
-      notes: values.notes?.trim() ?? '',
-    });
+      await savePatient({
+        id: patientModal?.patient?.id,
+        name: values.name.trim(),
+        phone: values.phone.trim(),
+        email: values.email.trim(),
+        dateOfBirth: values.dateOfBirth,
+        insuranceProvider: values.insuranceProvider.trim(),
+        memberId: values.memberId.trim(),
+        assignedDoctorId: values.assignedDoctorId,
+        status: values.status as PatientStatus,
+        lastAppointment: patientModal?.patient?.lastAppointment ?? todayStr,
+        tags,
+        notes: values.notes?.trim() ?? '',
+      });
+    } catch (err) {
+      setServerError(
+        err instanceof Error ? err.message : 'Unable to save patient record'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -106,9 +121,18 @@ export function PatientModal() {
       open={Boolean(patientModal)}
       onClose={closePatientModal}
       title={isEdit ? 'Edit patient record' : 'Register new patient'}
-      subtitle="Northfield Family Clinic · Patient directory"
+      subtitle="Northfield Family Clinic · Relational patient directory"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {serverError && (
+          <div
+            role="alert"
+            className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-700 font-medium"
+          >
+            {serverError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
@@ -140,7 +164,7 @@ export function PatientModal() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-              Phone (WhatsApp)
+              Phone number
             </label>
             <input
               type="text"
@@ -258,9 +282,10 @@ export function PatientModal() {
           </button>
           <button
             type="submit"
-            className="px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium transition-colors cursor-pointer"
+            disabled={submitting}
+            className="px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] disabled:opacity-60 text-white text-xs font-medium transition-colors cursor-pointer"
           >
-            {isEdit ? 'Save patient' : 'Add patient'}
+            {submitting ? 'Saving...' : isEdit ? 'Save patient' : 'Add patient'}
           </button>
         </div>
       </form>
