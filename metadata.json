@@ -1,0 +1,6 @@
+{
+  "name": "Northfield Family Clinic",
+  "description": "Modern healthcare clinic management SaaS dashboard for patient flow, scheduling, WhatsApp inbox, and communication campaigns.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
