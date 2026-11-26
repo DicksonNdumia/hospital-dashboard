@@ -201,12 +201,21 @@ export function PatientModal() {
               {...register('assignedDoctorId')}
               className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             >
-              {doctors.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
+              {doctors.length === 0 ? (
+                <option value="">No doctors yet — register one in Settings</option>
+              ) : (
+                doctors.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))
+              )}
             </select>
+            {errors.assignedDoctorId && (
+              <p className="text-xs text-red-600 mt-1">
+                {errors.assignedDoctorId.message}
+              </p>
+            )}
           </div>
 
           <div>

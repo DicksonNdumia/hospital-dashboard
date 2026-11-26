@@ -175,11 +175,15 @@ export function AppointmentModal() {
               {...register('patientId')}
               className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             >
-              {activePatients.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              {activePatients.length === 0 ? (
+                <option value="">No patients yet — add one in Patients</option>
+              ) : (
+                activePatients.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))
+              )}
             </select>
             {errors.patientId && (
               <p className="text-xs text-red-600 mt-1">{errors.patientId.message}</p>
@@ -194,11 +198,15 @@ export function AppointmentModal() {
               {...register('doctorId')}
               className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             >
-              {doctors.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name} ({d.specialty})
-                </option>
-              ))}
+              {doctors.length === 0 ? (
+                <option value="">No doctors yet — register one in Settings</option>
+              ) : (
+                doctors.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.specialty})
+                  </option>
+                ))
+              )}
             </select>
             {errors.doctorId && (
               <p className="text-xs text-red-600 mt-1">{errors.doctorId.message}</p>
