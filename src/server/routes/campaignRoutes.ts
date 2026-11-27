@@ -16,20 +16,25 @@ const campaignSchema = z.object({
 });
 
 // GET /api/campaigns
-router.get('/', requireAuth, async (_req, res) => {
-  try {
-    const campaigns = await prisma.campaign.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { recipients: true } },
-      },
-    });
-    res.json({ campaigns });
-  } catch (error) {
-    console.error('List campaigns error:', error);
-    res.status(500).json({ error: 'Failed to load campaigns' });
+router.get(
+  '/',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR'),
+  async (_req, res) => {
+    try {
+      const campaigns = await prisma.campaign.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          _count: { select: { recipients: true, notifications: true } },
+        },
+      });
+      res.json({ campaigns });
+    } catch (error) {
+      console.error('List campaigns error:', error);
+      res.status(500).json({ error: 'Failed to load campaigns' });
+    }
   }
-});
+);
 
 // POST /api/campaigns (ADMIN only)
 router.post(
@@ -116,7 +121,7 @@ router.patch(
   }
 );
 
-// POST /api/campaigns/:id/execute — Record DB-only campaign completion (no external providers)
+// POST /api/campaigns/:id/execute — Generate in-app notifications for eligible patients (no external providers)
 router.post(
   '/:id/execute',
   requireAuth,
@@ -135,18 +140,44 @@ router.post(
       }
 
       const todayStr = new Date().toISOString().slice(0, 10);
-      const activePatients = await prisma.patient.findMany({
+      const audienceLower = existing.audience.toLowerCase();
+
+      const allActivePatients = await prisma.patient.findMany({
         where: { status: { not: 'Archived' } },
-        take: 10,
+        include: {
+          notificationPreference: true,
+          appointments: {
+            where: { status: { not: 'CANCELLED' } },
+            select: { date: true, status: true },
+          },
+        },
       });
 
-      const updated = await prisma.$transaction(async (tx) => {
-        const sent = existing.recipientCount;
-        const read = Math.round(sent * 0.88);
-        const replies = Math.round(sent * 0.22);
-        const bookings = Math.round(sent * 0.11);
+      let targetPatients = allActivePatients;
+      if (audienceLower.includes('new')) {
+        const filtered = allActivePatients.filter((p) => p.status === 'New');
+        if (filtered.length > 0) targetPatients = filtered;
+      } else if (audienceLower.includes('upcoming')) {
+        const filtered = allActivePatients.filter((p) =>
+          p.appointments.some((a) => a.date >= todayStr)
+        );
+        if (filtered.length > 0) targetPatients = filtered;
+      } else if (audienceLower.includes('follow-up') || audienceLower.includes('follow up')) {
+        const filtered = allActivePatients.filter(
+          (p) => p.status === 'Active' || p.appointments.length > 0
+        );
+        if (filtered.length > 0) targetPatients = filtered;
+      }
 
-        for (const p of activePatients) {
+      const eligiblePatients = targetPatients.filter(
+        (p) => p.notificationPreference?.campaignAnnouncements !== false
+      );
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        let notificationsCreated = 0;
+
+        for (const p of eligiblePatients) {
           await tx.campaignRecipient.upsert({
             where: {
               campaignId_patientId: {
@@ -154,25 +185,61 @@ router.post(
                 patientId: p.id,
               },
             },
-            update: { deliveryStatus: 'SENT', sentAt: new Date() },
+            update: { deliveryStatus: 'SENT', sentAt: now },
             create: {
               campaignId: existing.id,
               patientId: p.id,
               deliveryStatus: 'SENT',
-              sentAt: new Date(),
+              sentAt: now,
             },
           });
+
+          const alreadyNotified = await tx.patientNotification.findFirst({
+            where: {
+              patientId: p.id,
+              campaignId: existing.id,
+            },
+          });
+
+          const firstName = p.name.trim().split(/\s+/)[0] || p.name;
+          const personalizedMessage = existing.messageTemplate.replace(
+            /\{\{\s*first_name\s*\}\}/gi,
+            firstName
+          );
+
+          if (!alreadyNotified) {
+            await tx.patientNotification.create({
+              data: {
+                patientId: p.id,
+                campaignId: existing.id,
+                type: 'CAMPAIGN',
+                title: existing.name,
+                message: personalizedMessage,
+                actionRoute: 'portal_appointments',
+              },
+            });
+            notificationsCreated += 1;
+          }
         }
+
+        const totalRecipients = await tx.campaignRecipient.count({
+          where: { campaignId: existing.id },
+        });
+        const totalRead = await tx.patientNotification.count({
+          where: { campaignId: existing.id, isRead: true },
+        });
 
         const camp = await tx.campaign.update({
           where: { id },
           data: {
             status: 'COMPLETED',
             scheduledDate: todayStr,
-            sentCount: sent,
-            readCount: read,
-            replyCount: replies,
-            bookingsCount: bookings,
+            recipientCount: Math.max(existing.recipientCount, totalRecipients),
+            sentCount: totalRecipients,
+            readCount: totalRead,
+          },
+          include: {
+            _count: { select: { recipients: true, notifications: true } },
           },
         });
 
@@ -182,7 +249,7 @@ router.post(
             action: 'CAMPAIGN_EXECUTED',
             entityType: 'Campaign',
             entityId: camp.id,
-            details: `Recorded DB campaign completion for ${sent} target recipients`,
+            details: `Dispatched ${notificationsCreated} in-app notifications (${totalRecipients} eligible recipients)`,
           },
           tx
         );
@@ -193,7 +260,7 @@ router.post(
       res.json({ campaign: updated });
     } catch (error) {
       console.error('Execute campaign error:', error);
-      res.status(500).json({ error: 'Failed to complete campaign' });
+      res.status(500).json({ error: 'Failed to execute campaign' });
     }
   }
 );

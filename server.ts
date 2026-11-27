@@ -11,6 +11,8 @@ import flowRoutes from './src/server/routes/flowRoutes.ts';
 import campaignRoutes from './src/server/routes/campaignRoutes.ts';
 import messageRoutes from './src/server/routes/messageRoutes.ts';
 import analyticsRoutes from './src/server/routes/analyticsRoutes.ts';
+import labRoutes from './src/server/routes/labRoutes.ts';
+import portalRoutes from './src/server/routes/portalRoutes.ts';
 import { ensureSeeded } from './src/server/seedClinicData.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +40,8 @@ async function startServer() {
   app.use('/api/flow', flowRoutes);
   app.use('/api/campaigns', campaignRoutes);
   app.use('/api/conversations', messageRoutes);
+  app.use('/api/lab', labRoutes);
+  app.use('/api/portal', portalRoutes);
   app.use('/api', analyticsRoutes);
 
   // Unknown API route handler

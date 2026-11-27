@@ -14,7 +14,7 @@ const patientSchema = z.object({
   dateOfBirth: z.string().min(1, 'Date of birth is required'),
   insuranceProvider: z.string().min(1, 'Insurance provider is required'),
   memberId: z.string().min(1, 'Member ID is required'),
-  assignedDoctorId: z.string().min(1, 'Select a primary doctor'),
+  assignedDoctorId: z.string().optional(),
   status: z.enum(['Active', 'New', 'Follow-up', 'Archived']),
   tagsText: z.string().optional(),
   notes: z.string().optional(),
@@ -63,7 +63,7 @@ export function PatientModal() {
         dateOfBirth: p.dateOfBirth,
         insuranceProvider: p.insuranceProvider,
         memberId: p.memberId,
-        assignedDoctorId: p.assignedDoctorId,
+        assignedDoctorId: p.assignedDoctorId ?? '',
         status: p.status,
         tagsText: p.tags.join(', '),
         notes: p.notes,
@@ -101,7 +101,7 @@ export function PatientModal() {
         dateOfBirth: values.dateOfBirth,
         insuranceProvider: values.insuranceProvider.trim(),
         memberId: values.memberId.trim(),
-        assignedDoctorId: values.assignedDoctorId,
+        assignedDoctorId: values.assignedDoctorId || null,
         status: values.status as PatientStatus,
         lastAppointment: patientModal?.patient?.lastAppointment ?? todayStr,
         tags,
@@ -201,15 +201,12 @@ export function PatientModal() {
               {...register('assignedDoctorId')}
               className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
             >
-              {doctors.length === 0 ? (
-                <option value="">No doctors yet — register one in Settings</option>
-              ) : (
-                doctors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))
-              )}
+              <option value="">Unassigned (optional)</option>
+              {doctors.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
             </select>
             {errors.assignedDoctorId && (
               <p className="text-xs text-red-600 mt-1">

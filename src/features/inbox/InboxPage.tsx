@@ -101,7 +101,7 @@ export function InboxPage() {
   const activePatient = activeConv?.patientId
     ? getPatientById(activeConv.patientId)
     : undefined;
-  const activeDoctor = activePatient
+  const activeDoctor = activePatient?.assignedDoctorId
     ? getDoctorById(activePatient.assignedDoctorId)
     : undefined;
 
@@ -522,7 +522,8 @@ export function InboxPage() {
                       openAppointmentModal({
                         mode: 'create',
                         defaultPatientId: activePatient.id,
-                        defaultDoctorId: activePatient.assignedDoctorId,
+                        defaultDoctorId:
+                          activePatient.assignedDoctorId ?? undefined,
                       })
                     }
                     className="inline-flex items-center gap-1 text-xs font-medium text-[#0B6657] hover:underline cursor-pointer"

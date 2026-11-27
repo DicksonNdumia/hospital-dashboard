@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.ts';
-import { type AuthenticatedRequest, requireAuth } from '../auth.ts';
+import { type AuthenticatedRequest, requireAuth, requireRole } from '../auth.ts';
 import { writeAuditLog } from '../audit.ts';
+
+const STAFF_ROLES = ['ADMIN', 'RECEPTIONIST', 'DOCTOR', 'LAB_TECHNICIAN'] as const;
 
 const router = Router();
 
@@ -59,29 +61,38 @@ function serializeConversation(conv: {
 }
 
 // GET /api/conversations — List internal clinic conversations & unread count
-router.get('/', requireAuth, async (_req, res) => {
-  try {
-    const conversations = await prisma.conversation.findMany({
-      orderBy: { lastUpdated: 'desc' },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
+router.get(
+  '/',
+  requireAuth,
+  requireRole(...STAFF_ROLES),
+  async (_req, res) => {
+    try {
+      const conversations = await prisma.conversation.findMany({
+        orderBy: { lastUpdated: 'desc' },
+        include: {
+          messages: {
+            orderBy: { createdAt: 'asc' },
+          },
         },
-      },
-    });
+      });
 
-    const serialized = conversations.map(serializeConversation);
-    const totalUnread = serialized.reduce((sum, c) => sum + c.unreadCount, 0);
+      const serialized = conversations.map(serializeConversation);
+      const totalUnread = serialized.reduce((sum, c) => sum + c.unreadCount, 0);
 
-    res.json({ conversations: serialized, totalUnread });
-  } catch (error) {
-    console.error('List conversations error:', error);
-    res.status(500).json({ error: 'Failed to load clinic conversations' });
+      res.json({ conversations: serialized, totalUnread });
+    } catch (error) {
+      console.error('List conversations error:', error);
+      res.status(500).json({ error: 'Failed to load clinic conversations' });
+    }
   }
-});
+);
 
 // POST /api/conversations — Create internal conversation
-router.post('/', requireAuth, async (req: AuthenticatedRequest, res) => {
+router.post(
+  '/',
+  requireAuth,
+  requireRole(...STAFF_ROLES),
+  async (req: AuthenticatedRequest, res) => {
   try {
     const parsed = createConversationSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -155,7 +166,11 @@ router.post('/', requireAuth, async (req: AuthenticatedRequest, res) => {
 });
 
 // POST /api/conversations/:id/messages — Send internal clinic message
-router.post('/:id/messages', requireAuth, async (req: AuthenticatedRequest, res) => {
+router.post(
+  '/:id/messages',
+  requireAuth,
+  requireRole(...STAFF_ROLES),
+  async (req: AuthenticatedRequest, res) => {
   try {
     const id = String(req.params.id);
     const parsed = createMessageSchema.safeParse(req.body);
@@ -216,7 +231,11 @@ router.post('/:id/messages', requireAuth, async (req: AuthenticatedRequest, res)
 });
 
 // POST /api/conversations/:id/read — Mark conversation messages as read
-router.post('/:id/read', requireAuth, async (req, res) => {
+router.post(
+  '/:id/read',
+  requireAuth,
+  requireRole(...STAFF_ROLES),
+  async (req, res) => {
   try {
     const id = String(req.params.id);
     await prisma.message.updateMany({

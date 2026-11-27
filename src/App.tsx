@@ -15,9 +15,11 @@ import { SchedulePage } from './features/schedule/SchedulePage';
 import { CampaignsPage } from './features/campaigns/CampaignsPage';
 import { ReportsPage } from './features/reports/ReportsPage';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { LaboratoryPage } from './features/laboratory/LaboratoryPage';
+import { PatientPortalPage } from './features/portal/PatientPortalPages';
 
 function ClinicShell() {
-  const { authStatus, activeRoute } = useClinic();
+  const { authStatus, authUser, activeRoute } = useClinic();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   if (authStatus === 'loading') {
@@ -37,7 +39,23 @@ function ClinicShell() {
     );
   }
 
+  const role = authUser?.role ?? 'ADMIN';
+  const isPatient = role === 'PATIENT';
+  const isLabTech = role === 'LAB_TECHNICIAN';
+  const isClinicalStaff =
+    role === 'ADMIN' || role === 'RECEPTIONIST' || role === 'DOCTOR';
+
   const renderPage = () => {
+    if (isPatient) {
+      return <PatientPortalPage />;
+    }
+
+    if (isLabTech) {
+      if (activeRoute === 'inbox') return <InboxPage />;
+      if (activeRoute === 'settings') return <SettingsPage />;
+      return <LaboratoryPage />;
+    }
+
     switch (activeRoute) {
       case 'dashboard':
         return <DashboardPage />;
@@ -49,8 +67,14 @@ function ClinicShell() {
         return <AppointmentsPage />;
       case 'schedule':
         return <SchedulePage />;
+      case 'laboratory':
+        return role === 'ADMIN' || role === 'DOCTOR' ? (
+          <LaboratoryPage />
+        ) : (
+          <DashboardPage />
+        );
       case 'campaigns':
-        return <CampaignsPage />;
+        return role === 'ADMIN' ? <CampaignsPage /> : <DashboardPage />;
       case 'reports':
         return <ReportsPage />;
       case 'settings':
@@ -75,9 +99,13 @@ function ClinicShell() {
         </main>
       </div>
 
-      <AppointmentModal />
-      <PatientModal />
-      <PatientProfileDrawer />
+      {isClinicalStaff && (
+        <>
+          <AppointmentModal />
+          <PatientModal />
+          <PatientProfileDrawer />
+        </>
+      )}
       <ToastContainer />
     </div>
   );

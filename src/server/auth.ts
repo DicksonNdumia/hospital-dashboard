@@ -2,7 +2,12 @@ import crypto from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from './db.ts';
 
-export type StaffRole = 'ADMIN' | 'RECEPTIONIST' | 'DOCTOR';
+export type StaffRole =
+  | 'ADMIN'
+  | 'RECEPTIONIST'
+  | 'DOCTOR'
+  | 'LAB_TECHNICIAN'
+  | 'PATIENT';
 
 export interface AuthUser {
   id: string;
@@ -10,6 +15,7 @@ export interface AuthUser {
   name: string;
   role: StaffRole;
   doctorId: string | null;
+  patientId: string | null;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -37,7 +43,9 @@ export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-export async function createSession(userId: string): Promise<{ token: string; expiresAt: Date }> {
+export async function createSession(
+  userId: string
+): Promise<{ token: string; expiresAt: Date }> {
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
@@ -84,6 +92,7 @@ export async function requireAuth(
           include: {
             role: true,
             doctorProfile: true,
+            patientProfile: true,
           },
         },
       },
@@ -91,7 +100,9 @@ export async function requireAuth(
 
     if (!session || session.expiresAt < new Date() || !session.user.active) {
       if (session) {
-        await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
+        await prisma.session
+          .delete({ where: { id: session.id } })
+          .catch(() => undefined);
       }
       res.status(401).json({ error: 'Session expired or invalid' });
       return;
@@ -103,6 +114,7 @@ export async function requireAuth(
       name: session.user.name,
       role: session.user.role.name as StaffRole,
       doctorId: session.user.doctorProfile?.id ?? null,
+      patientId: session.user.patientProfile?.id ?? null,
     };
 
     next();

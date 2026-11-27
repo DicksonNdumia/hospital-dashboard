@@ -19,18 +19,33 @@ import {
   Doctor,
   DoctorSchedule,
   FlowStatus,
+  LabOrder,
+  LabOrderStatus,
+  LabPriority,
+  LabResultFlag,
+  LabTechnicianOption,
+  LabTest,
   NavRoute,
+  NotificationPreference,
   Patient,
+  PortalOverview,
   StaffAccount,
   StaffRole,
   ToastItem,
 } from '../types/clinic';
 import {
+  apiDownloadBlob,
   apiRequest,
   getAuthToken,
   setAuthToken,
   setOnUnauthorized,
 } from '../lib/api';
+
+function defaultRouteForRole(role: StaffRole): NavRoute {
+  if (role === 'PATIENT') return 'portal_dashboard';
+  if (role === 'LAB_TECHNICIAN') return 'laboratory';
+  return 'dashboard';
+}
 
 export interface AppointmentModalDraft {
   mode: 'create' | 'edit';
@@ -73,6 +88,15 @@ interface ClinicContextValue {
     email: string;
     password: string;
   }) => Promise<void>;
+  patientRegister: (input: {
+    name: string;
+    email: string;
+    password: string;
+    phone: string;
+    dateOfBirth: string;
+    insuranceProvider?: string;
+    memberId?: string;
+  }) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 
@@ -90,6 +114,15 @@ interface ClinicContextValue {
   settings: ClinicSettings;
   staffAccounts: StaffAccount[];
   auditLogs: AuditLogEntry[];
+  labTests: LabTest[];
+  labOrders: LabOrder[];
+  labTechnicians: LabTechnicianOption[];
+  portalOverview: PortalOverview | null;
+  portalBookingOptions: {
+    services: string[];
+    doctors: Doctor[];
+    requirePatientBookingApproval: boolean;
+  } | null;
   toasts: ToastItem[];
 
   activeConversationId: string;
@@ -144,6 +177,10 @@ interface ClinicContextValue {
   ) => Promise<Patient>;
   updatePatientNotes: (patientId: string, notes: string) => Promise<void>;
   archivePatient: (patientId: string) => Promise<void>;
+  provisionPatientPortalAccount: (
+    patientId: string,
+    password: string
+  ) => Promise<void>;
 
   saveCampaign: (data: {
     id?: string;
@@ -178,10 +215,89 @@ interface ClinicContextValue {
     role: StaffRole;
     specialty?: string;
     room?: string;
+    patientId?: string;
+    phone?: string;
+    dateOfBirth?: string;
+    insuranceProvider?: string;
+    memberId?: string;
+    assignedDoctorId?: string | null;
   }) => Promise<void>;
   toggleStaffActive: (userId: string, active: boolean) => Promise<void>;
 
+  // Laboratory Management operations
+  createLabTest: (data: {
+    code: string;
+    name: string;
+    category: string;
+    sampleType: string;
+    unit: string;
+    referenceRange: string;
+    turnaroundHours: number;
+    priceCents: number;
+  }) => Promise<void>;
+  createLabOrder: (data: {
+    patientId: string;
+    doctorId?: string;
+    appointmentId?: string | null;
+    labTestId: string;
+    technicianId?: string | null;
+    priority: LabPriority;
+    clinicalIndication: string;
+  }) => Promise<LabOrder>;
+  assignLabOrder: (orderId: string, technicianId: string | null) => Promise<void>;
+  saveLabResults: (
+    orderId: string,
+    results: Array<{
+      parameterName: string;
+      value: string;
+      unit: string;
+      referenceRange: string;
+      flag: LabResultFlag;
+      notes: string;
+    }>
+  ) => Promise<void>;
+  uploadLabReport: (orderId: string, file: File, title?: string) => Promise<void>;
+  transitionLabOrder: (
+    orderId: string,
+    targetStatus: Exclude<LabOrderStatus, 'REQUESTED'>,
+    extra?: { sampleId?: string; doctorReviewNotes?: string }
+  ) => Promise<void>;
+  downloadLabReport: (reportId: string, fallbackFilename?: string) => Promise<void>;
+
+  // Patient Portal operations
+  fetchAvailableSlots: (params: {
+    doctorId: string;
+    date: string;
+    durationMinutes?: number;
+  }) => Promise<{ availableSlots: string[]; reason?: string }>;
+  bookPortalAppointment: (data: {
+    doctorId: string;
+    date: string;
+    time: string;
+    durationMinutes?: number;
+    category: string;
+    notes?: string;
+  }) => Promise<void>;
+  updatePortalAppointment: (
+    appointmentId: string,
+    data: {
+      action: 'CANCEL' | 'RESCHEDULE';
+      date?: string;
+      time?: string;
+      notes?: string;
+    }
+  ) => Promise<void>;
+  updatePortalProfile: (data: {
+    phone?: string;
+    insuranceProvider?: string;
+    memberId?: string;
+    notificationPreference?: NotificationPreference;
+  }) => Promise<void>;
+  markNotificationRead: (notificationId: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+
   totalUnreadMessages: number;
+  unreadPortalNotificationsCount: number;
   getPatientById: (id: string) => Patient | undefined;
   getDoctorById: (id: string) => Doctor | undefined;
 }
@@ -207,6 +323,15 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<ClinicSettings>(DEFAULT_SETTINGS);
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [labTests, setLabTests] = useState<LabTest[]>([]);
+  const [labOrders, setLabOrders] = useState<LabOrder[]>([]);
+  const [labTechnicians, setLabTechnicians] = useState<LabTechnicianOption[]>([]);
+  const [portalOverview, setPortalOverview] = useState<PortalOverview | null>(null);
+  const [portalBookingOptions, setPortalBookingOptions] = useState<{
+    services: string[];
+    doctors: Doctor[];
+    requirePatientBookingApproval: boolean;
+  } | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [activeConversationId, setActiveConversationId] = useState<string>('');
@@ -255,6 +380,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         if (getAuthToken()) {
           const me = await apiRequest<{ user: AuthUser }>('/api/auth/me');
           setAuthUser(me.user);
+          setActiveRoute(defaultRouteForRole(me.user.role));
           setAuthStatus('authenticated');
         } else {
           setAuthStatus('unauthenticated');
@@ -266,9 +392,61 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshAllData = useCallback(async () => {
-    if (!getAuthToken()) return;
+    if (!getAuthToken() || !authUser) return;
     setIsLoadingData(true);
     try {
+      const role = authUser.role;
+
+      if (role === 'PATIENT') {
+        const [overviewRes, optionsRes, settingsRes] = await Promise.all([
+          apiRequest<PortalOverview>('/api/portal/overview'),
+          apiRequest<{
+            services: string[];
+            doctors: Doctor[];
+            requirePatientBookingApproval: boolean;
+          }>('/api/portal/booking-options'),
+          apiRequest<{ settings: ClinicSettings | null }>('/api/settings'),
+        ]);
+        setPortalOverview(overviewRes);
+        setPortalBookingOptions(optionsRes);
+        setDoctors(optionsRes.doctors);
+        setLabOrders(overviewRes.labOrders);
+        setAppointments(overviewRes.appointments);
+        if (settingsRes.settings) setSettings(settingsRes.settings);
+        return;
+      }
+
+      if (role === 'LAB_TECHNICIAN') {
+        const [
+          testsRes,
+          ordersRes,
+          techsRes,
+          conversationsRes,
+          analyticsRes,
+          settingsRes,
+        ] = await Promise.all([
+          apiRequest<{ tests: LabTest[] }>('/api/lab/tests?includeInactive=true'),
+          apiRequest<{ orders: LabOrder[] }>('/api/lab/orders'),
+          apiRequest<{ technicians: LabTechnicianOption[] }>('/api/lab/technicians'),
+          apiRequest<{ conversations: Conversation[] }>('/api/conversations'),
+          apiRequest<ClinicAnalytics>('/api/analytics'),
+          apiRequest<{ settings: ClinicSettings | null }>('/api/settings'),
+        ]);
+        setLabTests(testsRes.tests);
+        setLabOrders(ordersRes.orders);
+        setLabTechnicians(techsRes.technicians);
+        setConversations(conversationsRes.conversations);
+        setAnalytics(analyticsRes);
+        if (settingsRes.settings) setSettings(settingsRes.settings);
+        setActiveConversationId((prev) =>
+          prev && conversationsRes.conversations.some((c) => c.id === prev)
+            ? prev
+            : conversationsRes.conversations[0]?.id ?? ''
+        );
+        return;
+      }
+
+      // Clinical Staff: ADMIN, RECEPTIONIST, DOCTOR
       const [
         doctorsRes,
         patientsRes,
@@ -277,6 +455,8 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         campaignsRes,
         analyticsRes,
         settingsRes,
+        labTestsRes,
+        labOrdersRes,
       ] = await Promise.all([
         apiRequest<{ doctors: Doctor[] }>('/api/doctors'),
         apiRequest<{ items: Patient[] }>('/api/patients?limit=100'),
@@ -285,6 +465,8 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         apiRequest<{ campaigns: Campaign[] }>('/api/campaigns'),
         apiRequest<ClinicAnalytics>('/api/analytics'),
         apiRequest<{ settings: ClinicSettings | null }>('/api/settings'),
+        apiRequest<{ tests: LabTest[] }>('/api/lab/tests'),
+        apiRequest<{ orders: LabOrder[] }>('/api/lab/orders'),
       ]);
 
       setDoctors(doctorsRes.doctors);
@@ -293,6 +475,8 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       setConversations(conversationsRes.conversations);
       setCampaigns(campaignsRes.campaigns);
       setAnalytics(analyticsRes);
+      setLabTests(labTestsRes.tests);
+      setLabOrders(labOrdersRes.orders);
       if (settingsRes.settings) setSettings(settingsRes.settings);
 
       setActiveConversationId((prev) => {
@@ -305,7 +489,14 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         return conversationsRes.conversations[0]?.id ?? '';
       });
 
-      if (authUser?.role === 'ADMIN') {
+      if (role === 'ADMIN' || role === 'DOCTOR') {
+        const techsRes = await apiRequest<{ technicians: LabTechnicianOption[] }>(
+          '/api/lab/technicians'
+        );
+        setLabTechnicians(techsRes.technicians);
+      }
+
+      if (role === 'ADMIN') {
         const [usersRes, auditRes] = await Promise.all([
           apiRequest<{ users: StaffAccount[] }>('/api/auth/users'),
           apiRequest<{ logs: AuditLogEntry[] }>('/api/audit-logs'),
@@ -323,7 +514,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoadingData(false);
     }
-  }, [authUser?.role, addToast]);
+  }, [authUser, addToast]);
 
   useEffect(() => {
     if (authStatus === 'authenticated') {
@@ -342,10 +533,41 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       );
       setAuthToken(res.token);
       setAuthUser(res.user);
+      setActiveRoute(defaultRouteForRole(res.user.role));
       setAuthStatus('authenticated');
       addToast({
         title: `Welcome, ${res.user.name}`,
         description: 'Clinic administrator account configured.',
+        variant: 'success',
+      });
+    },
+    [addToast]
+  );
+
+  const patientRegister = useCallback(
+    async (input: {
+      name: string;
+      email: string;
+      password: string;
+      phone: string;
+      dateOfBirth: string;
+      insuranceProvider?: string;
+      memberId?: string;
+    }) => {
+      const res = await apiRequest<{ token: string; user: AuthUser }>(
+        '/api/auth/patient-register',
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }
+      );
+      setAuthToken(res.token);
+      setAuthUser(res.user);
+      setActiveRoute('portal_dashboard');
+      setAuthStatus('authenticated');
+      addToast({
+        title: `Welcome, ${res.user.name}`,
+        description: 'Your patient portal account is active.',
         variant: 'success',
       });
     },
@@ -363,8 +585,8 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       );
       setAuthToken(res.token);
       setAuthUser(res.user);
+      setActiveRoute(defaultRouteForRole(res.user.role));
       setAuthStatus('authenticated');
-      setActiveRoute('dashboard');
       addToast({
         title: `Signed in as ${res.user.name}`,
         description: `Role: ${res.user.role}`,
@@ -391,6 +613,11 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     setAnalytics(null);
     setStaffAccounts([]);
     setAuditLogs([]);
+    setLabTests([]);
+    setLabOrders([]);
+    setLabTechnicians([]);
+    setPortalOverview(null);
+    setPortalBookingOptions(null);
   }, []);
 
   const getPatientById = useCallback(
@@ -699,6 +926,32 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [profilePatientId, addToast, refreshAllData]
+  );
+
+  const provisionPatientPortalAccount = useCallback(
+    async (patientId: string, password: string) => {
+      try {
+        await apiRequest(`/api/patients/${patientId}/portal-account`, {
+          method: 'POST',
+          body: JSON.stringify({ password }),
+        });
+        addToast({
+          title: 'Patient portal account enabled',
+          description: 'Patient can now sign in using their email.',
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Portal activation failed',
+          description:
+            err instanceof Error ? err.message : 'Could not enable portal login',
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
   );
 
   const selectConversation = useCallback(
@@ -1021,6 +1274,12 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       role: StaffRole;
       specialty?: string;
       room?: string;
+      patientId?: string;
+      phone?: string;
+      dateOfBirth?: string;
+      insuranceProvider?: string;
+      memberId?: string;
+      assignedDoctorId?: string | null;
     }) => {
       try {
         await apiRequest('/api/auth/register', {
@@ -1028,7 +1287,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify(data),
         });
         addToast({
-          title: 'Staff account created',
+          title: 'Account created',
           description: `${data.name} (${data.role})`,
           variant: 'success',
         });
@@ -1068,9 +1327,381 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     [addToast, refreshAllData]
   );
 
+  // Laboratory Management operations
+  const createLabTest = useCallback(
+    async (data: {
+      code: string;
+      name: string;
+      category: string;
+      sampleType: string;
+      unit: string;
+      referenceRange: string;
+      turnaroundHours: number;
+      priceCents: number;
+    }) => {
+      try {
+        await apiRequest('/api/lab/tests', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title: 'Lab test added to catalog',
+          description: `${data.code} — ${data.name}`,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Failed to add lab test',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const createLabOrder = useCallback(
+    async (data: {
+      patientId: string;
+      doctorId?: string;
+      appointmentId?: string | null;
+      labTestId: string;
+      technicianId?: string | null;
+      priority: LabPriority;
+      clinicalIndication: string;
+    }) => {
+      try {
+        const res = await apiRequest<{ order: LabOrder }>('/api/lab/orders', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title: 'Lab request created',
+          description: `${res.order.orderNumber} (${res.order.labTest.name})`,
+          variant: 'success',
+        });
+        await refreshAllData();
+        return res.order;
+      } catch (err) {
+        addToast({
+          title: 'Lab order failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const assignLabOrder = useCallback(
+    async (orderId: string, technicianId: string | null) => {
+      try {
+        await apiRequest(`/api/lab/orders/${orderId}/assign`, {
+          method: 'PATCH',
+          body: JSON.stringify({ technicianId }),
+        });
+        addToast({
+          title: technicianId ? 'Lab technician assigned' : 'Technician unassigned',
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Assignment failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const saveLabResults = useCallback(
+    async (
+      orderId: string,
+      results: Array<{
+        parameterName: string;
+        value: string;
+        unit: string;
+        referenceRange: string;
+        flag: LabResultFlag;
+        notes: string;
+      }>
+    ) => {
+      try {
+        await apiRequest(`/api/lab/orders/${orderId}/results`, {
+          method: 'POST',
+          body: JSON.stringify({ results }),
+        });
+        addToast({
+          title: 'Lab results saved',
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Failed to save results',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const uploadLabReport = useCallback(
+    async (orderId: string, file: File, title?: string) => {
+      try {
+        await apiRequest(`/api/lab/orders/${orderId}/report`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/pdf',
+            'X-File-Name': encodeURIComponent(file.name),
+            ...(title ? { 'X-Report-Title': encodeURIComponent(title) } : {}),
+          },
+          body: file,
+        });
+        addToast({
+          title: 'PDF report uploaded',
+          description: file.name,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'PDF upload failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const transitionLabOrder = useCallback(
+    async (
+      orderId: string,
+      targetStatus: Exclude<LabOrderStatus, 'REQUESTED'>,
+      extra?: { sampleId?: string; doctorReviewNotes?: string }
+    ) => {
+      try {
+        await apiRequest(`/api/lab/orders/${orderId}/transition`, {
+          method: 'POST',
+          body: JSON.stringify({ targetStatus, ...extra }),
+        });
+        addToast({
+          title: `Lab status updated: ${targetStatus.replace(/_/g, ' ')}`,
+          variant: targetStatus === 'RELEASED' ? 'success' : 'info',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Status transition failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const downloadLabReport = useCallback(
+    async (reportId: string, fallbackFilename?: string) => {
+      try {
+        await apiDownloadBlob(`/api/lab/reports/${reportId}/download`, fallbackFilename);
+      } catch (err) {
+        addToast({
+          title: 'Download denied',
+          description: err instanceof Error ? err.message : 'Unable to download report',
+          variant: 'error',
+        });
+      }
+    },
+    [addToast]
+  );
+
+  // Patient Portal operations
+  const fetchAvailableSlots = useCallback(
+    async (params: { doctorId: string; date: string; durationMinutes?: number }) => {
+      const qs = new URLSearchParams({
+        doctorId: params.doctorId,
+        date: params.date,
+        ...(params.durationMinutes
+          ? { durationMinutes: String(params.durationMinutes) }
+          : {}),
+      });
+      return apiRequest<{ availableSlots: string[]; reason?: string }>(
+        `/api/portal/slots?${qs.toString()}`
+      );
+    },
+    []
+  );
+
+  const bookPortalAppointment = useCallback(
+    async (data: {
+      doctorId: string;
+      date: string;
+      time: string;
+      durationMinutes?: number;
+      category: string;
+      notes?: string;
+    }) => {
+      try {
+        const res = await apiRequest<{ appointment: Appointment }>(
+          '/api/portal/appointments',
+          {
+            method: 'POST',
+            body: JSON.stringify(data),
+          }
+        );
+        addToast({
+          title:
+            res.appointment.status === 'CONFIRMED'
+              ? 'Appointment confirmed'
+              : 'Appointment request submitted',
+          description: `${data.date} at ${data.time}`,
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Booking failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const updatePortalAppointment = useCallback(
+    async (
+      appointmentId: string,
+      data: {
+        action: 'CANCEL' | 'RESCHEDULE';
+        date?: string;
+        time?: string;
+        notes?: string;
+      }
+    ) => {
+      try {
+        await apiRequest(`/api/portal/appointments/${appointmentId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title:
+            data.action === 'CANCEL'
+              ? 'Appointment cancelled'
+              : 'Appointment rescheduled',
+          variant: data.action === 'CANCEL' ? 'warning' : 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const updatePortalProfile = useCallback(
+    async (data: {
+      phone?: string;
+      insuranceProvider?: string;
+      memberId?: string;
+      notificationPreference?: NotificationPreference;
+    }) => {
+      try {
+        await apiRequest('/api/portal/profile', {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        });
+        addToast({
+          title: 'Profile & preferences updated',
+          variant: 'success',
+        });
+        await refreshAllData();
+      } catch (err) {
+        addToast({
+          title: 'Profile update failed',
+          description: err instanceof Error ? err.message : undefined,
+          variant: 'error',
+        });
+        throw err;
+      }
+    },
+    [addToast, refreshAllData]
+  );
+
+  const markNotificationRead = useCallback(
+    async (notificationId: string) => {
+      try {
+        await apiRequest(`/api/portal/notifications/${notificationId}/read`, {
+          method: 'POST',
+        });
+        setPortalOverview((prev) =>
+          prev
+            ? {
+                ...prev,
+                notifications: prev.notifications.map((n) =>
+                  n.id === notificationId
+                    ? { ...n, isRead: true, readAt: new Date().toISOString() }
+                    : n
+                ),
+              }
+            : prev
+        );
+      } catch {
+        // ignore read error
+      }
+    },
+    []
+  );
+
+  const markAllNotificationsRead = useCallback(async () => {
+    try {
+      await apiRequest('/api/portal/notifications/read-all', {
+        method: 'POST',
+      });
+      setPortalOverview((prev) =>
+        prev
+          ? {
+              ...prev,
+              notifications: prev.notifications.map((n) => ({
+                ...n,
+                isRead: true,
+                readAt: n.readAt ?? new Date().toISOString(),
+              })),
+            }
+          : prev
+      );
+      addToast({ title: 'All notifications marked read', variant: 'info' });
+    } catch {
+      // ignore
+    }
+  }, [addToast]);
+
   const totalUnreadMessages = useMemo(
     () => conversations.reduce((acc, c) => acc + c.unreadCount, 0),
     [conversations]
+  );
+
+  const unreadPortalNotificationsCount = useMemo(
+    () => (portalOverview?.notifications ?? []).filter((n) => !n.isRead).length,
+    [portalOverview]
   );
 
   const value: ClinicContextValue = {
@@ -1078,6 +1709,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     authUser,
     defaultAdmin,
     setupInitialAdmin,
+    patientRegister,
     login,
     logout,
     activeRoute,
@@ -1093,6 +1725,11 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     settings,
     staffAccounts,
     auditLogs,
+    labTests,
+    labOrders,
+    labTechnicians,
+    portalOverview,
+    portalBookingOptions,
     toasts,
     activeConversationId,
     setActiveConversationId,
@@ -1119,6 +1756,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     savePatient,
     updatePatientNotes,
     archivePatient,
+    provisionPatientPortalAccount,
     saveCampaign,
     executeCampaignNow,
     scheduleCampaign,
@@ -1129,7 +1767,21 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     updateSettings,
     registerStaffUser,
     toggleStaffActive,
+    createLabTest,
+    createLabOrder,
+    assignLabOrder,
+    saveLabResults,
+    uploadLabReport,
+    transitionLabOrder,
+    downloadLabReport,
+    fetchAvailableSlots,
+    bookPortalAppointment,
+    updatePortalAppointment,
+    updatePortalProfile,
+    markNotificationRead,
+    markAllNotificationsRead,
     totalUnreadMessages,
+    unreadPortalNotificationsCount,
     getPatientById,
     getDoctorById,
   };

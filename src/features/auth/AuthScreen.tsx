@@ -1,21 +1,50 @@
 import React, { useEffect, useState } from 'react';
-import { HeartPulse, Lock, Mail, User, ShieldCheck } from 'lucide-react';
+import {
+  HeartPulse,
+  Lock,
+  Mail,
+  User,
+  ShieldCheck,
+  Phone,
+  Calendar,
+  CreditCard,
+} from 'lucide-react';
 import { useClinic } from '../../context/ClinicContext';
 
 export function AuthScreen() {
-  const { authStatus, defaultAdmin, setupInitialAdmin, login } = useClinic();
+  const { authStatus, defaultAdmin, setupInitialAdmin, patientRegister, login } =
+    useClinic();
   const isSetup = authStatus === 'setup_required';
 
+  const [mode, setMode] = useState<'signin' | 'patient_register'>('signin');
   const [name, setName] = useState(defaultAdmin.name);
   const [email, setEmail] = useState(defaultAdmin.email);
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [insuranceProvider, setInsuranceProvider] = useState('Self-Pay');
+  const [memberId, setMemberId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setName((prev) => prev || defaultAdmin.name);
-    setEmail((prev) => prev || defaultAdmin.email);
-  }, [defaultAdmin]);
+    if (mode === 'signin') {
+      setName((prev) => prev || defaultAdmin.name);
+      setEmail((prev) => prev || defaultAdmin.email);
+    }
+  }, [defaultAdmin, mode]);
+
+  const switchMode = (next: 'signin' | 'patient_register') => {
+    setMode(next);
+    setError(null);
+    setPassword('');
+    if (next === 'patient_register') {
+      setName('');
+      setEmail('');
+    } else {
+      setEmail(defaultAdmin.email);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +53,16 @@ export function AuthScreen() {
     try {
       if (isSetup) {
         await setupInitialAdmin({ name, email, password });
+      } else if (mode === 'patient_register') {
+        await patientRegister({
+          name,
+          email,
+          password,
+          phone,
+          dateOfBirth,
+          insuranceProvider: insuranceProvider.trim() || 'Self-Pay',
+          memberId: memberId.trim() || 'SELF-PAY',
+        });
       } else {
         await login(email, password);
       }
@@ -49,11 +88,42 @@ export function AuthScreen() {
               <p className="text-xs text-[#9DBCB3]">
                 {isSetup
                   ? 'Initial administrator setup'
-                  : 'Clinic operations portal'}
+                  : mode === 'patient_register'
+                  ? 'Patient self-service portal registration'
+                  : 'Clinic & patient portal sign in'}
               </p>
             </div>
           </div>
         </div>
+
+        {!isSetup && (
+          <div className="px-6 pt-5">
+            <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#F3F7F4] border border-[#E2EAE5]">
+              <button
+                type="button"
+                onClick={() => switchMode('signin')}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                  mode === 'signin'
+                    ? 'bg-white text-[#073C35] shadow-xs'
+                    : 'text-[#84938D] hover:text-[#172B27]'
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => switchMode('patient_register')}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                  mode === 'patient_register'
+                    ? 'bg-white text-[#073C35] shadow-xs'
+                    : 'text-[#84938D] hover:text-[#172B27]'
+                }`}
+              >
+                New patient signup
+              </button>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {isSetup && (
@@ -62,7 +132,7 @@ export function AuthScreen() {
               <div>
                 <p className="font-semibold">Claim clinic administrator access</p>
                 <p className="text-[#0B6657] mt-0.5">
-                  Create the primary Admin account to unlock patient records, scheduling, and staff role registration.
+                  Create the primary Admin account to unlock patient records, scheduling, laboratory workflows, and staff registration.
                 </p>
               </div>
             </div>
@@ -77,7 +147,7 @@ export function AuthScreen() {
             </div>
           )}
 
-          {isSetup && (
+          {(isSetup || mode === 'patient_register') && (
             <div>
               <label className="block text-xs font-medium text-[#172B27] mb-1.5">
                 Full name
@@ -89,6 +159,7 @@ export function AuthScreen() {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  placeholder={isSetup ? defaultAdmin.name : 'e.g. Jordan Rivera'}
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
                 />
               </div>
@@ -97,7 +168,7 @@ export function AuthScreen() {
 
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-              Staff email
+              {mode === 'patient_register' ? 'Patient email' : 'Account email'}
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-[#84938D] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -106,25 +177,108 @@ export function AuthScreen() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="dicksonndumia19@gmail.com"
+                placeholder={
+                  mode === 'patient_register'
+                    ? 'you@example.com'
+                    : 'dicksonndumia19@gmail.com'
+                }
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
               />
             </div>
           </div>
 
+          {!isSetup && mode === 'patient_register' && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+                    Phone number
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-[#84938D] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="tel"
+                      required
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+1 (555) 234-5678"
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+                    Date of birth
+                  </label>
+                  <div className="relative">
+                    <Calendar className="w-4 h-4 text-[#84938D] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="date"
+                      required
+                      value={dateOfBirth}
+                      onChange={(e) => setDateOfBirth(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+                    Insurance provider
+                  </label>
+                  <div className="relative">
+                    <CreditCard className="w-4 h-4 text-[#84938D] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={insuranceProvider}
+                      onChange={(e) => setInsuranceProvider(e.target.value)}
+                      placeholder="Self-Pay"
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[#172B27] mb-1.5">
+                    Member ID (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={memberId}
+                    onChange={(e) => setMemberId(e.target.value)}
+                    placeholder="SELF-PAY"
+                    className="w-full px-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-              Password {isSetup && <span className="text-[#84938D]">(min 8 characters)</span>}
+              Password{' '}
+              {(isSetup || mode === 'patient_register') && (
+                <span className="text-[#84938D]">(min 8 characters)</span>
+              )}
             </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-[#84938D] absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
                 required
-                minLength={isSetup ? 8 : 1}
+                minLength={isSetup || mode === 'patient_register' ? 8 : 1}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={isSetup ? 'Choose an admin password' : 'Enter your password'}
+                placeholder={
+                  isSetup
+                    ? 'Choose an admin password'
+                    : mode === 'patient_register'
+                    ? 'Create a portal password'
+                    : 'Enter your password'
+                }
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#E2EAE5] text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
               />
             </div>
@@ -138,17 +292,22 @@ export function AuthScreen() {
             {submitting
               ? isSetup
                 ? 'Configuring workspace...'
+                : mode === 'patient_register'
+                ? 'Creating patient account...'
                 : 'Signing in...'
               : isSetup
               ? 'Create Admin account & sign in'
+              : mode === 'patient_register'
+              ? 'Create patient portal account'
               : 'Sign in'}
           </button>
 
           <p className="text-[11px] text-center text-[#84938D] pt-1">
-            Role-based access enforced for Admin, Receptionist, and Doctor staff accounts.
+            Role-based access enforced for Admin, Receptionist, Doctor, Lab Technician, and Patient accounts.
           </p>
         </form>
       </div>
     </div>
   );
 }
+

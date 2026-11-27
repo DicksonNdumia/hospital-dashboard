@@ -21,12 +21,13 @@ export function SettingsPage() {
     updateDoctorSchedule,
     registerStaffUser,
     toggleStaffActive,
+    patients,
   } = useClinic();
 
   const isAdmin = authUser?.role === 'ADMIN';
   const [form, setForm] = useState(settings);
 
-  // Staff Registration Modal
+  // Staff / User Registration Modal
   const [staffModalOpen, setStaffModalOpen] = useState(false);
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
@@ -34,6 +35,9 @@ export function SettingsPage() {
   const [staffRole, setStaffRole] = useState<StaffRole>('RECEPTIONIST');
   const [staffSpecialty, setStaffSpecialty] = useState('Family Medicine');
   const [staffRoom, setStaffRoom] = useState('Suite 115');
+  const [linkPatientId, setLinkPatientId] = useState('');
+  const [patientPhone, setPatientPhone] = useState('');
+  const [patientDob, setPatientDob] = useState('');
 
   // Doctor Registration Modal
   const [docModalOpen, setDocModalOpen] = useState(false);
@@ -80,11 +84,17 @@ export function SettingsPage() {
       role: staffRole,
       specialty: staffRole === 'DOCTOR' ? staffSpecialty : undefined,
       room: staffRole === 'DOCTOR' ? staffRoom : undefined,
+      patientId: staffRole === 'PATIENT' && linkPatientId ? linkPatientId : undefined,
+      phone: staffRole === 'PATIENT' && !linkPatientId ? patientPhone : undefined,
+      dateOfBirth: staffRole === 'PATIENT' && !linkPatientId ? patientDob : undefined,
     });
     setStaffModalOpen(false);
     setStaffName('');
     setStaffEmail('');
     setStaffPassword('');
+    setLinkPatientId('');
+    setPatientPhone('');
+    setPatientDob('');
   };
 
   const handleCreateDoctor = async (e: React.FormEvent) => {
@@ -231,6 +241,29 @@ export function SettingsPage() {
                 className="w-4 h-4 accent-[#073C35]"
               />
             </label>
+
+            <label className="flex items-center justify-between gap-3 py-1 cursor-pointer">
+              <div>
+                <p className="text-xs font-medium text-[#172B27]">
+                  Require clinic approval for patient portal bookings
+                </p>
+                <p className="text-[11px] text-[#84938D]">
+                  When enabled, self-booked patient requests start as SCHEDULED until staff confirm; otherwise CONFIRMED immediately
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                disabled={!isAdmin}
+                checked={form.requirePatientBookingApproval ?? true}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    requirePatientBookingApproval: e.target.checked,
+                  })
+                }
+                className="w-4 h-4 accent-[#073C35]"
+              />
+            </label>
           </div>
 
           {isAdmin && (
@@ -332,7 +365,7 @@ export function SettingsPage() {
                   Staff accounts & roles
                 </h2>
                 <p className="text-xs text-[#84938D]">
-                  Admin-controlled registration for Admin, Receptionist, and Doctor
+                  Admin-controlled accounts for Staff, Lab Technicians, Doctors, and Patients
                 </p>
               </div>
               <button
@@ -341,7 +374,7 @@ export function SettingsPage() {
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                Register staff
+                Register user
               </button>
             </div>
 
@@ -355,10 +388,13 @@ export function SettingsPage() {
                     <p className="font-semibold text-[#172B27] truncate">
                       {acc.name}{' '}
                       <span className="font-medium text-[#0B6657]">
-                        · {acc.role}
+                        · {acc.role.replace(/_/g, ' ')}
                       </span>
                     </p>
-                    <p className="text-[#84938D] truncate">{acc.email}</p>
+                    <p className="text-[#84938D] truncate">
+                      {acc.email}
+                      {acc.patientName ? ` · Chart: ${acc.patientName}` : ''}
+                    </p>
                   </div>
                   {acc.id !== authUser?.id && (
                     <button
@@ -457,6 +493,8 @@ export function SettingsPage() {
               >
                 <option value="RECEPTIONIST">RECEPTIONIST</option>
                 <option value="DOCTOR">DOCTOR</option>
+                <option value="LAB_TECHNICIAN">LAB_TECHNICIAN</option>
+                <option value="PATIENT">PATIENT</option>
                 <option value="ADMIN">ADMIN</option>
               </select>
             </div>
@@ -500,6 +538,64 @@ export function SettingsPage() {
               </div>
             </div>
           )}
+          {staffRole === 'PATIENT' && (
+            <div className="space-y-3 bg-[#F3F7F4] border border-[#E2EAE5] rounded-xl p-3">
+              <div>
+                <label className="block text-xs font-medium text-[#172B27] mb-1">
+                  Link to existing patient chart (optional)
+                </label>
+                <select
+                  value={linkPatientId}
+                  onChange={(e) => {
+                    const pid = e.target.value;
+                    setLinkPatientId(pid);
+                    const found = patients.find((p) => p.id === pid);
+                    if (found) {
+                      setStaffName(found.name);
+                      setStaffEmail(found.email);
+                    }
+                  }}
+                  className="w-full rounded-lg border border-[#E2EAE5] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="">Create new patient record automatically</option>
+                  {patients
+                    .filter((p) => !p.userId && p.status !== 'Archived')
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.email})
+                      </option>
+                    ))}
+                </select>
+              </div>
+              {!linkPatientId && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-[#172B27] mb-1">
+                      Phone number
+                    </label>
+                    <input
+                      type="tel"
+                      value={patientPhone}
+                      onChange={(e) => setPatientPhone(e.target.value)}
+                      placeholder="+1 (555) 000-0000"
+                      className="w-full rounded-lg border border-[#E2EAE5] bg-white px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-[#172B27] mb-1">
+                      Date of birth
+                    </label>
+                    <input
+                      type="date"
+                      value={patientDob}
+                      onChange={(e) => setPatientDob(e.target.value)}
+                      className="w-full rounded-lg border border-[#E2EAE5] bg-white px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
@@ -512,7 +608,7 @@ export function SettingsPage() {
               type="submit"
               className="px-4 py-2 rounded-xl bg-[#073C35] text-white text-xs font-medium cursor-pointer"
             >
-              Create staff account
+              Create account
             </button>
           </div>
         </form>

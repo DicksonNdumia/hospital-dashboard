@@ -209,23 +209,36 @@ router.post(
 );
 
 // GET /api/flow/patient/:patientId — Patient visit & consultation history
-router.get('/patient/:patientId', requireAuth, async (req, res) => {
-  try {
-    const patientId = String(req.params.patientId);
-    const visits = await prisma.patientVisit.findMany({
-      where: { patientId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        appointment: true,
-        doctor: true,
-        consultation: true,
-      },
-    });
-    res.json({ visits });
-  } catch (error) {
-    console.error('Patient visit history error:', error);
-    res.status(500).json({ error: 'Failed to load patient visit history' });
+router.get(
+  '/patient/:patientId',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR', 'PATIENT'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const patientId = String(req.params.patientId);
+      if (
+        req.authUser?.role === 'PATIENT' &&
+        req.authUser.patientId !== patientId
+      ) {
+        res.status(403).json({ error: 'You may only view your own visit history' });
+        return;
+      }
+
+      const visits = await prisma.patientVisit.findMany({
+        where: { patientId },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          appointment: true,
+          doctor: true,
+          consultation: true,
+        },
+      });
+      res.json({ visits });
+    } catch (error) {
+      console.error('Patient visit history error:', error);
+      res.status(500).json({ error: 'Failed to load patient visit history' });
+    }
   }
-});
+);
 
 export default router;

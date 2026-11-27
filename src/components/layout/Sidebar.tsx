@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -9,10 +9,14 @@ import {
   BarChart3,
   Settings,
   HeartPulse,
+  FlaskConical,
+  FileText,
+  Bell,
+  UserCircle,
   X,
   LogOut,
 } from 'lucide-react';
-import { NavRoute } from '../../types/clinic';
+import { NavRoute, StaffRole } from '../../types/clinic';
 import { useClinic } from '../../context/ClinicContext';
 import { Avatar } from '../ui/Avatar';
 
@@ -21,34 +25,86 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-const NAV_ITEMS: {
+interface NavItem {
   id: NavRoute;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-}[] = [
+}
+
+const CLINICAL_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'inbox', label: 'Inbox', icon: MessageSquare },
   { id: 'patients', label: 'Patients', icon: Users },
   { id: 'appointments', label: 'Appointments', icon: ClipboardList },
   { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+  { id: 'laboratory', label: 'Laboratory', icon: FlaskConical },
   { id: 'campaigns', label: 'Campaigns', icon: Megaphone },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
+const LAB_TECH_NAV: NavItem[] = [
+  { id: 'laboratory', label: 'Laboratory', icon: FlaskConical },
+  { id: 'inbox', label: 'Inbox', icon: MessageSquare },
+  { id: 'settings', label: 'Settings', icon: Settings },
+];
+
+const PATIENT_NAV: NavItem[] = [
+  { id: 'portal_dashboard', label: 'Overview', icon: LayoutDashboard },
+  { id: 'portal_appointments', label: 'Appointments', icon: CalendarDays },
+  { id: 'portal_labs', label: 'Lab Reports', icon: FileText },
+  { id: 'portal_notifications', label: 'Notifications', icon: Bell },
+  { id: 'portal_profile', label: 'My Profile', icon: UserCircle },
+];
+
+function getNavForRole(role: StaffRole): NavItem[] {
+  if (role === 'PATIENT') return PATIENT_NAV;
+  if (role === 'LAB_TECHNICIAN') return LAB_TECH_NAV;
+  if (role === 'RECEPTIONIST') {
+    return CLINICAL_NAV.filter((i) => i.id !== 'campaigns' && i.id !== 'laboratory');
+  }
+  if (role === 'DOCTOR') {
+    return CLINICAL_NAV.filter((i) => i.id !== 'campaigns');
+  }
+  return CLINICAL_NAV;
+}
+
 export const NADIA_AVATAR = '/src/assets/images/avatar_nadia_admin_1795723058520.jpg';
 
 export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
-  const { activeRoute, setActiveRoute, totalUnreadMessages, authUser, logout } =
-    useClinic();
+  const {
+    activeRoute,
+    setActiveRoute,
+    totalUnreadMessages,
+    unreadPortalNotificationsCount,
+    authUser,
+    logout,
+  } = useClinic();
+
+  const userName = authUser?.name ?? 'Staff';
+  const userRole: StaffRole = authUser?.role ?? 'ADMIN';
+  const navItems = useMemo(() => getNavForRole(userRole), [userRole]);
+
+  const homeRoute: NavRoute =
+    userRole === 'PATIENT'
+      ? 'portal_dashboard'
+      : userRole === 'LAB_TECHNICIAN'
+      ? 'laboratory'
+      : 'dashboard';
+
+  const profileRoute: NavRoute =
+    userRole === 'PATIENT' ? 'portal_profile' : 'settings';
 
   const handleNav = (id: NavRoute) => {
     setActiveRoute(id);
     onCloseMobile();
   };
 
-  const userName = authUser?.name ?? 'Staff';
-  const userRole = authUser?.role ?? 'ADMIN';
+  const getBadgeCount = (id: NavRoute) => {
+    if (id === 'inbox') return totalUnreadMessages;
+    if (id === 'portal_notifications') return unreadPortalNotificationsCount;
+    return 0;
+  };
 
   return (
     <>
@@ -60,7 +116,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
         <div className="flex flex-col items-center gap-6 w-full">
           <button
             type="button"
-            onClick={() => handleNav('dashboard')}
+            onClick={() => handleNav(homeRoute)}
             title="Northfield Family Clinic"
             className="w-10 h-10 rounded-xl bg-[#0B6657] hover:bg-[#20B875] flex items-center justify-center transition-colors shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#20B875]"
           >
@@ -68,10 +124,11 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           </button>
 
           <nav className="flex flex-col items-center gap-1.5 w-full px-2.5">
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeRoute === item.id;
-              const showBadge = item.id === 'inbox' && totalUnreadMessages > 0;
+              const badgeCount = getBadgeCount(item.id);
+              const showBadge = badgeCount > 0;
 
               return (
                 <div key={item.id} className="relative group w-full flex justify-center">
@@ -92,7 +149,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     )}
                     {showBadge && (
                       <span className="absolute top-1.5 right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[#20B875] text-[#073C35] text-[10px] font-bold flex items-center justify-center tabular-nums leading-none">
-                        {totalUnreadMessages}
+                        {badgeCount}
                       </span>
                     )}
                   </button>
@@ -102,7 +159,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     className="pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-[#172B27] text-white text-xs font-medium whitespace-nowrap shadow-md z-50"
                   >
                     {item.label}
-                    {showBadge ? ` (${totalUnreadMessages})` : ''}
+                    {showBadge ? ` (${badgeCount})` : ''}
                   </div>
                 </div>
               );
@@ -115,7 +172,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
           <div className="relative group flex justify-center w-full">
             <button
               type="button"
-              onClick={() => handleNav('settings')}
+              onClick={() => handleNav(profileRoute)}
               aria-label={`${userName} — ${userRole}`}
               className="rounded-full p-0.5 ring-2 ring-[#0B6657] hover:ring-[#20B875] transition-all cursor-pointer"
             >
@@ -129,7 +186,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
               role="tooltip"
               className="pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-[#172B27] text-white text-xs font-medium whitespace-nowrap shadow-md z-50"
             >
-              {userName} · {userRole}
+              {userName} · {userRole.replace(/_/g, ' ')}
             </div>
           </div>
 
@@ -168,7 +225,9 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     <p className="text-sm font-semibold text-white truncate">
                       Northfield Clinic
                     </p>
-                    <p className="text-[11px] text-[#9DBCB3]">{userRole}</p>
+                    <p className="text-[11px] text-[#9DBCB3]">
+                      {userRole.replace(/_/g, ' ')}
+                    </p>
                   </div>
                 </div>
                 <button
@@ -182,10 +241,11 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
               </div>
 
               <nav className="flex flex-col gap-1">
-                {NAV_ITEMS.map((item) => {
+                {navItems.map((item) => {
                   const Icon = item.icon;
                   const isActive = activeRoute === item.id;
-                  const showBadge = item.id === 'inbox' && totalUnreadMessages > 0;
+                  const badgeCount = getBadgeCount(item.id);
+                  const showBadge = badgeCount > 0;
                   return (
                     <button
                       key={item.id}
@@ -203,7 +263,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                       </span>
                       {showBadge && (
                         <span className="px-1.5 py-0.5 rounded-full bg-[#20B875] text-[#073C35] text-[11px] font-bold tabular-nums">
-                          {totalUnreadMessages}
+                          {badgeCount}
                         </span>
                       )}
                     </button>
@@ -215,7 +275,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             <div className="pt-4 border-t border-[#0B6657] flex items-center justify-between gap-2">
               <button
                 type="button"
-                onClick={() => handleNav('settings')}
+                onClick={() => handleNav(profileRoute)}
                 className="flex items-center gap-2.5 text-left min-w-0 cursor-pointer"
               >
                 <Avatar
@@ -227,7 +287,9 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                   <p className="text-sm font-medium text-white truncate">
                     {userName}
                   </p>
-                  <p className="text-[11px] text-[#9DBCB3] truncate">{userRole}</p>
+                  <p className="text-[11px] text-[#9DBCB3] truncate">
+                    {userRole.replace(/_/g, ' ')}
+                  </p>
                 </div>
               </button>
               <button
@@ -245,3 +307,4 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
     </>
   );
 }
+

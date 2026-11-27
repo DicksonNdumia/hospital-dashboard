@@ -57,8 +57,8 @@ export function CampaignsPage() {
 
   const openCreateModal = () => {
     setFormName('');
-    setFormAudience('Patients overdue for annual check-up');
-    setFormRecipients(150);
+    setFormAudience('All Active Patients');
+    setFormRecipients(25);
     setFormDate(todayStr);
     setFormStatus('DRAFT');
     setFormTemplate(
@@ -122,7 +122,7 @@ export function CampaignsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[#172B27]">Campaigns</h1>
           <p className="text-xs sm:text-sm text-[#84938D]">
-            Database-managed patient outreach templates, audiences, and campaign statistics
+            Target patient groups and dispatch in-app portal notifications with booking links
           </p>
         </div>
 
@@ -399,14 +399,38 @@ export function CampaignsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-[#172B27] mb-1.5">
-                Target audience
+                Target patient group
               </label>
+              <select
+                value={
+                  [
+                    'All Active Patients',
+                    'New Patients',
+                    'Follow-up Patients',
+                    'Upcoming Visits',
+                  ].includes(formAudience)
+                    ? formAudience
+                    : 'custom'
+                }
+                onChange={(e) => {
+                  if (e.target.value !== 'custom') {
+                    setFormAudience(e.target.value);
+                  }
+                }}
+                className="w-full rounded-xl border border-[#E2EAE5] bg-white px-3 py-2 text-sm text-[#172B27] mb-1.5 focus:outline-none focus:border-[#0B6657]"
+              >
+                <option value="All Active Patients">All Active Patients</option>
+                <option value="New Patients">New Patients</option>
+                <option value="Follow-up Patients">Follow-up Patients</option>
+                <option value="Upcoming Visits">Upcoming Visits</option>
+                <option value="custom">Custom group label</option>
+              </select>
               <input
                 type="text"
                 required
                 value={formAudience}
                 onChange={(e) => setFormAudience(e.target.value)}
-                className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-sm text-[#172B27] focus:outline-none focus:border-[#0B6657]"
+                className="w-full rounded-xl border border-[#E2EAE5] px-3 py-2 text-xs text-[#172B27] focus:outline-none focus:border-[#0B6657]"
               />
             </div>
 
@@ -581,16 +605,16 @@ export function CampaignsPage() {
         {confirmExecuteCampaign && (
           <div className="space-y-4">
             <p className="text-sm text-[#172B27] leading-relaxed">
-              Mark{' '}
+              Execute{' '}
               <span className="font-semibold">{confirmExecuteCampaign.name}</span>{' '}
-              as completed in the clinic database for{' '}
-              <span className="font-semibold tabular-nums">
-                {confirmExecuteCampaign.recipientCount}
-              </span>{' '}
-              target recipients ({confirmExecuteCampaign.audience})?
+              for{' '}
+              <span className="font-semibold">
+                {confirmExecuteCampaign.audience}
+              </span>
+              ?
             </p>
             <div className="rounded-xl bg-[#F3F7F4] border border-[#E2EAE5] p-3 text-xs text-[#84938D]">
-              Campaign records and recipient logs are persisted in the database with no external messaging dispatch.
+              This creates in-app patient portal notifications for matching active patients who opted into clinic announcements (no SMS, WhatsApp, or external email).
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
@@ -609,7 +633,7 @@ export function CampaignsPage() {
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#073C35] hover:bg-[#0B6657] text-white text-xs font-medium cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
-                Record completion
+                Send in-app notifications
               </button>
             </div>
           </div>

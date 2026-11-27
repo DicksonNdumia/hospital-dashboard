@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.ts';
-import { type AuthenticatedRequest, requireAuth, requireRole } from '../auth.ts';
+import { type AuthenticatedRequest, hashPassword, requireAuth, requireRole } from '../auth.ts';
 import { writeAuditLog } from '../audit.ts';
 
 const router = Router();
@@ -13,7 +13,7 @@ const createPatientSchema = z.object({
   dateOfBirth: z.string().min(4),
   insuranceProvider: z.string().min(1),
   memberId: z.string().min(1),
-  assignedDoctorId: z.string().min(1),
+  assignedDoctorId: z.string().optional().nullable(),
   status: z.enum(['Active', 'New', 'Follow-up', 'Archived']).default('New'),
   lastAppointment: z.string().optional(),
   tags: z.array(z.string()).default([]),
@@ -26,13 +26,14 @@ const AVATAR_TONES = ['#DCECE4', '#E3EEF3', '#EAF4EF', '#E6ECE8', '#E4EFEA', '#E
 
 function serializePatient(p: {
   id: string;
+  userId?: string | null;
   name: string;
   phone: string;
   email: string;
   dateOfBirth: string;
   insuranceProvider: string;
   memberId: string;
-  assignedDoctorId: string;
+  assignedDoctorId: string | null;
   status: string;
   lastAppointment: string;
   tags: string;
@@ -49,13 +50,14 @@ function serializePatient(p: {
   }
   return {
     id: p.id,
+    userId: p.userId ?? null,
     name: p.name,
     phone: p.phone,
     email: p.email,
     dateOfBirth: p.dateOfBirth,
     insuranceProvider: p.insuranceProvider,
     memberId: p.memberId,
-    assignedDoctorId: p.assignedDoctorId,
+    assignedDoctorId: p.assignedDoctorId ?? '',
     status: p.status,
     lastAppointment: p.lastAppointment,
     tags: parsedTags,
@@ -65,8 +67,12 @@ function serializePatient(p: {
   };
 }
 
-// GET /api/patients — Search, filter, paginate
-router.get('/', requireAuth, async (req, res) => {
+// GET /api/patients — Search, filter, paginate (Clinical staff only)
+router.get(
+  '/',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR'),
+  async (req, res) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const status = typeof req.query.status === 'string' ? req.query.status : 'all';
@@ -113,9 +119,20 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 // GET /api/patients/:id — Full patient profile + visit history
-router.get('/:id', requireAuth, async (req, res) => {
+router.get('/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const id = String(req.params.id);
+    if (
+      req.authUser?.role === 'PATIENT' &&
+      req.authUser.patientId !== id
+    ) {
+      res.status(403).json({ error: 'Access denied to another patient record' });
+      return;
+    }
+    if (req.authUser?.role === 'LAB_TECHNICIAN') {
+      res.status(403).json({ error: 'Lab technicians cannot access full patient charts' });
+      return;
+    }
     const patient = await prisma.patient.findUnique({
       where: { id },
       include: {
@@ -167,12 +184,15 @@ router.post(
         return;
       }
 
-      const doctor = await prisma.doctor.findUnique({
-        where: { id: parsed.data.assignedDoctorId },
-      });
-      if (!doctor) {
-        res.status(400).json({ error: 'Assigned doctor does not exist' });
-        return;
+      let assignedDoctorId: string | null = parsed.data.assignedDoctorId || null;
+      if (assignedDoctorId) {
+        const doctor = await prisma.doctor.findUnique({
+          where: { id: assignedDoctorId },
+        });
+        if (!doctor) {
+          res.status(400).json({ error: 'Assigned doctor does not exist' });
+          return;
+        }
       }
 
       const count = await prisma.patient.count();
@@ -185,13 +205,20 @@ router.post(
             dateOfBirth: parsed.data.dateOfBirth,
             insuranceProvider: parsed.data.insuranceProvider.trim(),
             memberId: parsed.data.memberId.trim(),
-            assignedDoctorId: parsed.data.assignedDoctorId,
+            assignedDoctorId,
             status: parsed.data.status,
             lastAppointment:
               parsed.data.lastAppointment ?? new Date().toISOString().slice(0, 10),
             tags: JSON.stringify(parsed.data.tags),
             notes: parsed.data.notes.trim(),
             avatarColor: AVATAR_TONES[count % AVATAR_TONES.length],
+            notificationPreference: {
+              create: {
+                appointmentUpdates: true,
+                labReportAlerts: true,
+                campaignAnnouncements: true,
+              },
+            },
           },
         });
 
@@ -350,4 +377,97 @@ router.delete(
   }
 );
 
+// POST /api/patients/:id/portal-account — Provision linked PATIENT portal login (ADMIN | RECEPTIONIST)
+router.post(
+  '/:id/portal-account',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = String(req.params.id);
+      const schema = z.object({
+        password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid password' });
+        return;
+      }
+
+      const patient = await prisma.patient.findUnique({ where: { id } });
+      if (!patient || patient.status === 'Archived') {
+        res.status(404).json({ error: 'Active patient record not found' });
+        return;
+      }
+      if (patient.userId) {
+        res.status(409).json({ error: 'This patient already has a portal account' });
+        return;
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { email: patient.email },
+      });
+      if (existingUser) {
+        res.status(409).json({ error: 'A user account already exists with this patient email' });
+        return;
+      }
+
+      const patientRole = await prisma.role.findUnique({
+        where: { name: 'PATIENT' },
+      });
+      if (!patientRole) {
+        res.status(500).json({ error: 'PATIENT role missing' });
+        return;
+      }
+
+      const updatedPatient = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email: patient.email,
+            name: patient.name,
+            passwordHash: hashPassword(parsed.data.password),
+            roleId: patientRole.id,
+            active: true,
+          },
+        });
+
+        const updated = await tx.patient.update({
+          where: { id: patient.id },
+          data: { userId: user.id },
+        });
+
+        await tx.notificationPreference.upsert({
+          where: { patientId: patient.id },
+          update: {},
+          create: {
+            patientId: patient.id,
+            appointmentUpdates: true,
+            labReportAlerts: true,
+            campaignAnnouncements: true,
+          },
+        });
+
+        await writeAuditLog(
+          {
+            actor: req.authUser,
+            action: 'PATIENT_PORTAL_PROVISIONED',
+            entityType: 'Patient',
+            entityId: patient.id,
+            details: `Linked portal account ${patient.email} to patient ${patient.name}`,
+          },
+          tx
+        );
+
+        return updated;
+      });
+
+      res.status(201).json({ patient: serializePatient(updatedPatient) });
+    } catch (error) {
+      console.error('Portal account provision error:', error);
+      res.status(500).json({ error: 'Failed to provision patient portal account' });
+    }
+  }
+);
+
 export default router;
+

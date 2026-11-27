@@ -8,38 +8,54 @@ import { writeAuditLog } from '../audit.ts';
 const router = Router();
 
 // GET /api/analytics — Computed exclusively from database queries
-router.get('/analytics', requireAuth, async (_req, res) => {
-  try {
-    const today = new Date();
-    const todayStr = format(today, 'yyyy-MM-dd');
-    const weekMonday = startOfWeek(today, { weekStartsOn: 1 });
+router.get(
+  '/analytics',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR', 'LAB_TECHNICIAN'),
+  async (_req, res) => {
+    try {
+      const today = new Date();
+      const todayStr = format(today, 'yyyy-MM-dd');
+      const weekMonday = startOfWeek(today, { weekStartsOn: 1 });
 
-    const [
-      todayAppointments,
-      totalRegisteredPatients,
-      doctors,
-      allAppointments,
-      unreadMessagesCount,
-      campaigns,
-    ] = await Promise.all([
-      prisma.appointment.findMany({
-        where: { date: todayStr },
-        include: { visit: true },
-      }),
-      prisma.patient.count({
-        where: { status: { not: 'Archived' } },
-      }),
-      prisma.doctor.findMany({
-        orderBy: { name: 'asc' },
-      }),
-      prisma.appointment.findMany({
-        include: { visit: true },
-      }),
-      prisma.message.count({
-        where: { isRead: false },
-      }),
-      prisma.campaign.findMany(),
-    ]);
+      const [
+        todayAppointments,
+        totalRegisteredPatients,
+        doctors,
+        allAppointments,
+        unreadMessagesCount,
+        campaigns,
+        pendingLabOrders,
+        underReviewLabOrders,
+        releasedLabOrders,
+      ] = await Promise.all([
+        prisma.appointment.findMany({
+          where: { date: todayStr },
+          include: { visit: true },
+        }),
+        prisma.patient.count({
+          where: { status: { not: 'Archived' } },
+        }),
+        prisma.doctor.findMany({
+          orderBy: { name: 'asc' },
+        }),
+        prisma.appointment.findMany({
+          include: { visit: true },
+        }),
+        prisma.message.count({
+          where: { isRead: false },
+        }),
+        prisma.campaign.findMany(),
+        prisma.labOrder.count({
+          where: { status: { in: ['REQUESTED', 'SAMPLE_COLLECTED', 'PROCESSING', 'COMPLETED'] } },
+        }),
+        prisma.labOrder.count({
+          where: { status: 'UNDER_REVIEW' },
+        }),
+        prisma.labOrder.count({
+          where: { status: 'RELEASED' },
+        }),
+      ]);
 
     const nonCancelledToday = todayAppointments.filter(
       (a) => a.status !== 'CANCELLED'
@@ -110,25 +126,29 @@ router.get('/analytics', requireAuth, async (_req, res) => {
 
     const campaignBookings = campaigns.reduce((s, c) => s + c.bookingsCount, 0);
 
-    res.json({
-      totalAppointmentsToday: nonCancelledToday.length,
-      completedAppointmentsToday: completedToday.length,
-      waitingCount: waitingToday.length,
-      inConsultationCount: inConsultationToday.length,
-      noShowCountToday: noShowToday.length,
-      noShowRate,
-      totalRegisteredPatients,
-      averageWaitMinutes,
-      unreadMessagesCount,
-      campaignBookings,
-      appointmentTrends,
-      doctorWorkload,
-    });
-  } catch (error) {
-    console.error('Analytics query error:', error);
-    res.status(500).json({ error: 'Failed to compute clinic analytics' });
+      res.json({
+        totalAppointmentsToday: nonCancelledToday.length,
+        completedAppointmentsToday: completedToday.length,
+        waitingCount: waitingToday.length,
+        inConsultationCount: inConsultationToday.length,
+        noShowCountToday: noShowToday.length,
+        noShowRate,
+        totalRegisteredPatients,
+        averageWaitMinutes,
+        unreadMessagesCount,
+        campaignBookings,
+        pendingLabOrders,
+        underReviewLabOrders,
+        releasedLabOrders,
+        appointmentTrends,
+        doctorWorkload,
+      });
+    } catch (error) {
+      console.error('Analytics query error:', error);
+      res.status(500).json({ error: 'Failed to compute clinic analytics' });
+    }
   }
-});
+);
 
 // GET /api/settings
 router.get('/settings', requireAuth, async (_req, res) => {
@@ -160,6 +180,7 @@ router.patch(
         autoReminder2h: z.boolean(),
         includeParkingNote: z.boolean().optional(),
         defaultAppointmentDuration: z.coerce.number().int().min(10).max(120).optional(),
+        requirePatientBookingApproval: z.boolean().optional(),
       });
 
       const parsed = schema.safeParse(req.body);

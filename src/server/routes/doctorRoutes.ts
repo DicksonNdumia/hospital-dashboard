@@ -198,7 +198,11 @@ router.patch(
 );
 
 // GET /api/doctors/:id/appointments — Assigned appointments
-router.get('/:id/appointments', requireAuth, async (req, res) => {
+router.get(
+  '/:id/appointments',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR'),
+  async (req, res) => {
   try {
     const id = String(req.params.id);
     const date = typeof req.query.date === 'string' ? req.query.date : undefined;

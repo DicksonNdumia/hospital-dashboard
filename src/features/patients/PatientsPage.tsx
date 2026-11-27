@@ -70,8 +70,8 @@ export function PatientsPage() {
       let aVal = '';
       let bVal = '';
       if (sortField === 'assignedDoctorId') {
-        aVal = getDoctorById(a.assignedDoctorId)?.name ?? '';
-        bVal = getDoctorById(b.assignedDoctorId)?.name ?? '';
+        aVal = a.assignedDoctorId ? getDoctorById(a.assignedDoctorId)?.name ?? '' : '';
+        bVal = b.assignedDoctorId ? getDoctorById(b.assignedDoctorId)?.name ?? '' : '';
       } else {
         aVal = a[sortField];
         bVal = b[sortField];
@@ -233,7 +233,9 @@ export function PatientsPage() {
                 </thead>
                 <tbody className="divide-y divide-[#E2EAE5] text-xs">
                   {paginatedPatients.map((p) => {
-                    const doc = getDoctorById(p.assignedDoctorId);
+                    const doc = p.assignedDoctorId
+                      ? getDoctorById(p.assignedDoctorId)
+                      : undefined;
                     const statusColor =
                       p.status === 'Active'
                         ? 'text-[#0B6657]'

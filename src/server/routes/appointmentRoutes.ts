@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { prisma } from '../db.ts';
 import { type AuthenticatedRequest, requireAuth, requireRole } from '../auth.ts';
 import { writeAuditLog } from '../audit.ts';
+import { validateSchedulingRules } from '../scheduling.ts';
 
 const router = Router();
 
@@ -22,156 +23,56 @@ const createAppointmentSchema = z.object({
 
 const updateAppointmentSchema = createAppointmentSchema.partial();
 
-function timeToMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(Number);
-  return (h || 0) * 60 + (m || 0);
-}
-
-function intervalsOverlap(
-  startA: number,
-  durA: number,
-  startB: number,
-  durB: number
-): boolean {
-  const endA = startA + durA;
-  const endB = startB + durB;
-  return startA < endB && startB < endA;
-}
-
-async function validateSchedulingRules(params: {
-  excludeAppointmentId?: string;
-  doctorId: string;
-  patientId: string;
-  date: string;
-  time: string;
-  durationMinutes: number;
-  status: string;
-}): Promise<string | null> {
-  // Cancelled appointments do not occupy slots
-  if (params.status === 'CANCELLED') return null;
-
-  const doctor = await prisma.doctor.findUnique({
-    where: { id: params.doctorId },
-    include: { schedules: true },
-  });
-  if (!doctor) return 'Selected doctor does not exist.';
-
-  const todayStr = format(new Date(), 'yyyy-MM-dd');
-  if (params.date === todayStr && !doctor.availableToday) {
-    return `${doctor.name} is currently marked off-duty today.`;
-  }
-
-  const targetDate = new Date(`${params.date}T12:00:00`);
-  const dayOfWeek = targetDate.getDay();
-  const daySchedule = doctor.schedules.find((s) => s.dayOfWeek === dayOfWeek);
-  const startMin = timeToMinutes(params.time);
-  const endMin = startMin + params.durationMinutes;
-
-  if (daySchedule) {
-    if (!daySchedule.isActive) {
-      return `${doctor.name} is not scheduled to work on that day.`;
-    }
-    const schedStart = timeToMinutes(daySchedule.startTime);
-    const schedEnd = timeToMinutes(daySchedule.endTime);
-    if (startMin < schedStart || endMin > schedEnd) {
-      return `${doctor.name} is available ${daySchedule.startTime}–${daySchedule.endTime} on that day.`;
-    }
-  }
-
-  // Check doctor overlapping active appointments
-  const doctorSameDay = await prisma.appointment.findMany({
-    where: {
-      doctorId: params.doctorId,
-      date: params.date,
-      status: { not: 'CANCELLED' },
-      ...(params.excludeAppointmentId
-        ? { id: { not: params.excludeAppointmentId } }
-        : {}),
-    },
-  });
-
-  for (const existing of doctorSameDay) {
-    if (
-      intervalsOverlap(
-        startMin,
-        params.durationMinutes,
-        timeToMinutes(existing.time),
-        existing.durationMinutes
-      )
-    ) {
-      return `Schedule conflict: ${doctor.name} already has an appointment at ${existing.time}.`;
-    }
-  }
-
-  // Check patient overlapping active appointments
-  const patientSameDay = await prisma.appointment.findMany({
-    where: {
-      patientId: params.patientId,
-      date: params.date,
-      status: { not: 'CANCELLED' },
-      ...(params.excludeAppointmentId
-        ? { id: { not: params.excludeAppointmentId } }
-        : {}),
-    },
-  });
-
-  for (const existing of patientSameDay) {
-    if (
-      intervalsOverlap(
-        startMin,
-        params.durationMinutes,
-        timeToMinutes(existing.time),
-        existing.durationMinutes
-      )
-    ) {
-      return `Patient already has an active overlapping appointment at ${existing.time}.`;
-    }
-  }
-
-  return null;
-}
-
 // GET /api/appointments
-router.get('/', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
-    const doctorId =
-      typeof req.query.doctorId === 'string' ? req.query.doctorId : undefined;
-    const patientId =
-      typeof req.query.patientId === 'string' ? req.query.patientId : undefined;
-    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+router.get(
+  '/',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+      const doctorId =
+        typeof req.query.doctorId === 'string' ? req.query.doctorId : undefined;
+      const patientId =
+        typeof req.query.patientId === 'string' ? req.query.patientId : undefined;
+      const status = typeof req.query.status === 'string' ? req.query.status : undefined;
 
-    // Doctors viewing "mine=true" get scoped to their own appointments
-    const scopeDoctorId =
-      req.query.mine === 'true' && req.authUser?.doctorId
-        ? req.authUser.doctorId
-        : doctorId;
+      // Doctors viewing "mine=true" get scoped to their own appointments
+      const scopeDoctorId =
+        req.query.mine === 'true' && req.authUser?.doctorId
+          ? req.authUser.doctorId
+          : doctorId;
 
-    const appointments = await prisma.appointment.findMany({
-      where: {
-        ...(date ? { date } : {}),
-        ...(scopeDoctorId && scopeDoctorId !== 'all'
-          ? { doctorId: scopeDoctorId }
-          : {}),
-        ...(patientId ? { patientId } : {}),
-        ...(status && status !== 'all' ? { status } : {}),
-      },
-      orderBy: [{ date: 'asc' }, { time: 'asc' }],
-      include: {
-        visit: true,
-        consultation: true,
-      },
-    });
+      const appointments = await prisma.appointment.findMany({
+        where: {
+          ...(date ? { date } : {}),
+          ...(scopeDoctorId && scopeDoctorId !== 'all'
+            ? { doctorId: scopeDoctorId }
+            : {}),
+          ...(patientId ? { patientId } : {}),
+          ...(status && status !== 'all' ? { status } : {}),
+        },
+        orderBy: [{ date: 'asc' }, { time: 'asc' }],
+        include: {
+          visit: true,
+          consultation: true,
+        },
+      });
 
-    res.json({ appointments });
-  } catch (error) {
-    console.error('List appointments error:', error);
-    res.status(500).json({ error: 'Failed to retrieve appointments' });
+      res.json({ appointments });
+    } catch (error) {
+      console.error('List appointments error:', error);
+      res.status(500).json({ error: 'Failed to retrieve appointments' });
+    }
   }
-});
+);
 
 // GET /api/appointments/:id
-router.get('/:id', requireAuth, async (req, res) => {
+router.get(
+  '/:id',
+  requireAuth,
+  requireRole('ADMIN', 'RECEPTIONIST', 'DOCTOR'),
+  async (req, res) => {
   try {
     const id = String(req.params.id);
     const appointment = await prisma.appointment.findUnique({
@@ -366,6 +267,39 @@ router.patch(
           });
         }
 
+        const statusChanged = nextStatus !== existing.status;
+        const slotChanged = nextDate !== existing.date || nextTime !== existing.time;
+        if (
+          (statusChanged && ['CONFIRMED', 'CANCELLED'].includes(nextStatus)) ||
+          slotChanged
+        ) {
+          const pref = await tx.notificationPreference.findUnique({
+            where: { patientId: nextPatientId },
+          });
+          if (pref?.appointmentUpdates !== false) {
+            const title =
+              nextStatus === 'CANCELLED'
+                ? 'Appointment Cancelled'
+                : nextStatus === 'CONFIRMED' && statusChanged
+                ? 'Appointment Confirmed'
+                : 'Appointment Schedule Updated';
+            const message =
+              nextStatus === 'CANCELLED'
+                ? `Your ${apt.category} appointment on ${apt.date} at ${apt.time} has been cancelled.`
+                : `Your ${apt.category} appointment is scheduled for ${apt.date} at ${apt.time} (${apt.status}).`;
+
+            await tx.patientNotification.create({
+              data: {
+                patientId: nextPatientId,
+                type: 'APPOINTMENT',
+                title,
+                message,
+                actionRoute: 'portal_appointments',
+              },
+            });
+          }
+        }
+
         await writeAuditLog(
           {
             actor: req.authUser,
@@ -411,6 +345,21 @@ router.delete(
           },
           include: { visit: true },
         });
+
+        const pref = await tx.notificationPreference.findUnique({
+          where: { patientId: apt.patientId },
+        });
+        if (pref?.appointmentUpdates !== false) {
+          await tx.patientNotification.create({
+            data: {
+              patientId: apt.patientId,
+              type: 'APPOINTMENT',
+              title: 'Appointment Cancelled',
+              message: `Your ${apt.category} appointment on ${apt.date} at ${apt.time} was cancelled by the clinic.`,
+              actionRoute: 'portal_appointments',
+            },
+          });
+        }
 
         await writeAuditLog(
           {
